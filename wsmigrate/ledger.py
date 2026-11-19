@@ -1,5 +1,10 @@
 """SQLite progress ledger. Stores ids, hashes, states and reason codes only; never content."""
 import sqlite3
+import threading
+
+# Journal-mode change and schema creation on a fresh file can return BUSY without
+# honouring busy_timeout when several connections race; serialise setup in-process.
+_SETUP = threading.Lock()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages(
@@ -28,9 +33,10 @@ class Ledger:
     def __init__(self, path: str):
         self.db = sqlite3.connect(path, timeout=30)
         self.db.execute("PRAGMA busy_timeout=30000")
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.executescript(_SCHEMA)
-        self.db.commit()
+        with _SETUP:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.executescript(_SCHEMA)
+            self.db.commit()
 
     def close(self) -> None:
         self.db.close()
