@@ -91,8 +91,10 @@ def test_calendar_events_missing(cal, record_property):
 def test_nothing_left_failed(ledger, user, record_property):
     """No message or event is left in a failed state (unsupported event types excepted)."""
     # unsupported event types are expected and retried every run (R5)
-    n = sum(v for k, v in ledger.failures(user.key).items() if k != "unsupported_event_type")
-    _show(record_property, EXPECTED["test_nothing_left_failed"], f"{n} failed")
+    left = {k: v for k, v in sorted(ledger.failures(user.key).items()) if k != "unsupported_event_type"}
+    n = sum(left.values())
+    by_reason = f" ({', '.join(f'{k}: {v}' for k, v in left.items())})" if left else ""
+    _show(record_property, EXPECTED["test_nothing_left_failed"], f"{n} failed{by_reason}")
     assert n == 0, f"failed={n}"
 
 

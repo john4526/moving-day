@@ -211,3 +211,17 @@ def test_carried_over_notes_shows_counts_for_information(env, capfd):
         "threads: 3 on source, 3 on destination", "messages with no Date header: 1",
         "calendar entries of unsupported types not copied: 1", "outside shares: 2", "failed shares: 1",
         "shared calendars skipped: 3"]
+
+
+def test_nothing_left_failed_lists_reasons(env, capfd):
+    _, cfg, tmp = env
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    led = Ledger(str(tmp / "l.db"))
+    for mid, reason in (("x1", "http_403"), ("x2", "network_error"), ("x3", "http_403")):
+        led.mark_failed("u001", mid, reason)
+    led.set_event("u001", "primary", "e9", "", "t", "failed", "unsupported_event_type")
+    led.close()
+    _, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    assert rows["test_validation.py::test_nothing_left_failed[u001]"][3] == "3 failed (http_403: 2, network_error: 1)"
+    assert rows["test_validation.py::test_nothing_left_failed[u002]"][3] == "0 failed"
