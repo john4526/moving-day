@@ -16,6 +16,10 @@ def test_no_delete_trash_or_modify_in_package():
     hits = [(_owner(p, n), l.strip()) for p, lines in SOURCES.items() for n, l in enumerate(lines)
             if re.search(r"\.(delete|trash|untrash|modify|batchDelete|batchModify)\(", l)]
     kinds = (".events().delete(", ".permissions().delete(")
+    # the one caller of Drive.trash: copy_drive, on the destination Drive only
+    callers = [(o[0], l) for o, l in hits if o[0] != "api.py"]
+    assert callers == [("drive_copy.py", 'dst.trash(dst_user, row["dst_id"])')]
+    hits = [h for h in hits if h[0][0] == "api.py"]
     assert len(hits) == 2
     assert {(o, next(k for k in kinds if k in l)) for o, l in hits} == {
         (("api.py", "Calendar", "delete_event"), kinds[0]), (("api.py", "Drive", "remove_permission"), kinds[1])}
