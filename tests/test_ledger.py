@@ -167,3 +167,17 @@ def test_failed_event_ids_filters_by_reason(tmp_path):
     led.set_event("u001", "primary", "e2", "", "t", "failed", "http_500")
     led.set_event("u001", "other", "e3", "", "t", "failed", "unsupported_event_type")
     assert led.failed_event_ids("u001", "primary", "unsupported_event_type") == {"e1"}
+
+
+def test_contact_and_group_rows_roundtrip(tmp_path):
+    led = make(tmp_path)
+    led.set_contact("u001", "people/c1", "", "e1", "pending")
+    assert led.contact_rows("u001") == {"people/c1": ("", "e1", "pending")}
+    led.set_contact("u001", "people/c1", "people/d1", "e1", "done")
+    led.set_contact("u001", "people/c2", "", "e2", "failed", "http_500")
+    assert led.contact_rows("u001") == {"people/c1": ("people/d1", "e1", "done"),
+                                        "people/c2": ("", "e2", "failed")}
+    assert led.contact_rows("u002") == {}
+    led.set_group("u001", "contactGroups/a", "contactGroups/b")
+    assert led.group_map("u001") == {"contactGroups/a": "contactGroups/b"}
+    assert led.group_map("u002") == {}

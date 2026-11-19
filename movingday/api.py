@@ -1,6 +1,7 @@
 """The only code that talks to Google. Errors surface as ApiError carrying a status-derived reason only.
 
 Real wrappers are first exercised in the rehearsal; see docs/rehearsal-checklist.md.
+The People (contacts) wrapper is first exercised in the rehearsal too.
 """
 import base64
 import http.client
@@ -222,6 +223,55 @@ class Calendar(_Google):
             raise ValueError("send_notifications must be False")
         self._call(lambda: self._svc(user).acl().insert(
             calendarId=cal_id, body=rule, sendNotifications=send_notifications))
+
+
+PERSON_FIELDS = ("names", "emailAddresses", "phoneNumbers", "addresses", "organizations", "biographies",
+                 "birthdays", "events", "urls", "relations", "nicknames", "memberships")
+
+
+class People(_Google):
+    """Label membership is written through the `memberships` field of create/update; there is no
+    contactGroups.members call. Nothing here deletes."""
+    _api, _version = "people", "v1"
+
+    def list_contacts(self, user) -> list[dict]:
+        fields = ",".join(PERSON_FIELDS + ("metadata",))
+        return self._all(lambda tok: self._svc(user).people().connections().list(
+            resourceName="people/me", personFields=fields, pageSize=1000, pageToken=tok), "connections")
+
+    def count_other_contacts(self, user) -> int:
+        return len(self._all(lambda tok: self._svc(user).otherContacts().list(
+            readMask="metadata", pageSize=1000, pageToken=tok), "otherContacts"))
+
+    def list_groups(self, user) -> list[dict]:
+        groups = self._all(lambda tok: self._svc(user).contactGroups().list(pageSize=1000, pageToken=tok),
+                           "contactGroups")
+        return [{"resourceName": g["resourceName"], "name": g.get("name", ""), "groupType": g.get("groupType"),
+                 "memberCount": g.get("memberCount", 0)} for g in groups]
+
+    def create_group(self, user, name) -> str:
+        try:
+            return self._call(lambda: self._svc(user).contactGroups().create(
+                body={"contactGroup": {"name": name}}))["resourceName"]
+        except ApiError as e:
+            if e.reason != "http_409":
+                raise
+        for g in self.list_groups(user):
+            if g["groupType"] == "USER_CONTACT_GROUP" and g["name"].lower() == name.lower():
+                return g["resourceName"]
+        raise ApiError("http_409", False)
+
+    def create_contact(self, user, body) -> tuple[str, str]:
+        p = self._call(lambda: self._svc(user).people().createContact(body=body, personFields="metadata"))
+        return p["resourceName"], p["etag"]
+
+    def update_contact(self, user, resource, etag, body) -> str:
+        return self._call(lambda: self._svc(user).people().updateContact(
+            resourceName=resource, updatePersonFields=",".join(PERSON_FIELDS), personFields="metadata",
+            body={**body, "etag": etag}))["etag"]
+
+    def get_etag(self, user, resource) -> str:
+        return self._call(lambda: self._svc(user).people().get(resourceName=resource, personFields="metadata"))["etag"]
 
 
 class Directory(_Google):

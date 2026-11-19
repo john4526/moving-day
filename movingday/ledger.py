@@ -26,6 +26,13 @@ CREATE TABLE IF NOT EXISTS meta(
   PRIMARY KEY(user_key, name));
 CREATE TABLE IF NOT EXISTS calendar_claims(
   src_cal TEXT PRIMARY KEY, user_key TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS contacts(
+  user_key TEXT NOT NULL, src_resource TEXT NOT NULL, dst_resource TEXT NOT NULL,
+  src_etag TEXT NOT NULL, state TEXT NOT NULL, reason TEXT,
+  PRIMARY KEY(user_key, src_resource));
+CREATE TABLE IF NOT EXISTS contact_groups(
+  user_key TEXT NOT NULL, src_group TEXT NOT NULL, dst_group TEXT NOT NULL,
+  PRIMARY KEY(user_key, src_group));
 """
 
 
@@ -147,6 +154,21 @@ class Ledger:
     def drop_event(self, user_key, src_cal, src_event):
         self._w("DELETE FROM events WHERE user_key=? AND src_cal=? AND src_event=?",
                 (user_key, src_cal, src_event))
+
+    # contacts
+    def contact_rows(self, user_key):
+        return {r[0]: (r[1], r[2], r[3]) for r in self._r(
+            "SELECT src_resource, dst_resource, src_etag, state FROM contacts WHERE user_key=?", (user_key,))}
+
+    def set_contact(self, user_key, src_resource, dst_resource, src_etag, state, reason=None):
+        self._w("INSERT OR REPLACE INTO contacts VALUES(?,?,?,?,?,?)",
+                (user_key, src_resource, dst_resource, src_etag, state, reason))
+
+    def group_map(self, user_key):
+        return dict(self._r("SELECT src_group, dst_group FROM contact_groups WHERE user_key=?", (user_key,)))
+
+    def set_group(self, user_key, src_group, dst_group):
+        self._w("INSERT OR REPLACE INTO contact_groups VALUES(?,?,?)", (user_key, src_group, dst_group))
 
     # per-user facts
     def set_meta(self, user_key, name, value):

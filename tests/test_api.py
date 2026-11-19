@@ -172,3 +172,35 @@ def test_incomplete_read_maps_to_retryable_network_error():
         _execute(Req)
     assert (e.value.reason, e.value.retryable) == ("network_error", True)
     assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
+def test_fake_people_etags_change_and_stale_etag_is_rejected():
+    from fakes import FakePeople
+
+    p = FakePeople()
+    res = p.add_contact("a@x", {"names": [{"givenName": "A"}]})
+    etag = p.get_etag("a@x", res)
+    new = p.update_contact("a@x", res, etag, {"names": [{"givenName": "B"}]})
+    assert new != etag and p.get_etag("a@x", res) == new
+    with pytest.raises(ApiError) as e:
+        p.update_contact("a@x", res, etag, {"names": [{"givenName": "C"}]})
+    assert (e.value.reason, e.value.retryable) == ("http_400", False)
+    [c] = p.list_contacts("a@x")
+    assert c["resourceName"] == res and c["etag"] == new and c["names"] == [{"givenName": "B"}]
+
+
+def test_fake_people_groups_and_other_contacts():
+    from fakes import FakePeople
+
+    p = FakePeople()
+    g = p.add_group("a@x", "Work")
+    assert p.create_group("a@x", "work") == g
+    groups = {x["name"]: x for x in p.list_groups("a@x")}
+    assert groups["Work"]["groupType"] == "USER_CONTACT_GROUP"
+    assert groups["myContacts"]["groupType"] == "SYSTEM_CONTACT_GROUP"
+    p.add_contact("a@x", {"memberships": [{"contactGroupMembership": {"contactGroupResourceName": g}}]})
+    assert {x["name"]: x["memberCount"] for x in p.list_groups("a@x")}["Work"] == 1
+    with pytest.raises(ApiError):  # membership of a group the account does not have
+        p.create_contact("b@x", {"memberships": [{"contactGroupMembership": {"contactGroupResourceName": g}}]})
+    p.set_other_contacts("a@x", 4)
+    assert p.count_other_contacts("a@x") == 4 and p.count_other_contacts("b@x") == 0

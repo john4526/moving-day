@@ -1,4 +1,4 @@
-"""In-memory stand-ins for movingday.api.Gmail/Calendar/Directory."""
+"""In-memory stand-ins for movingday.api.Gmail/Calendar/Directory/People."""
 import copy
 import datetime
 import functools
@@ -213,6 +213,91 @@ class FakeDirectory(_Fake):
         return dict(self.aliases)
 
 
+SYSTEM_GROUPS = ["myContacts", "starred", "friends", "family", "coworkers", "chatBuddies", "all", "blocked"]
+
+
+class FakePeople(_Fake):
+    def __init__(self):
+        super().__init__()
+        self.contacts = {}  # user -> {resourceName: person incl. resourceName, etag}
+        self.groups = {}  # user -> {resourceName: name} (user groups only)
+        self.other = {}  # user -> count of other contacts
+
+    def add_contact(self, user, person) -> str:
+        res = self._id("people/c")
+        self.contacts.setdefault(user, {})[res] = {**copy.deepcopy(person), "resourceName": res,
+                                                   "etag": self._id("etag")}
+        return res
+
+    def add_group(self, user, name) -> str:
+        res = self._id("contactGroups/")
+        self.groups.setdefault(user, {})[res] = name
+        return res
+
+    def set_other_contacts(self, user, n):
+        self.other[user] = n
+
+    def _contact(self, user, resource):
+        c = self.contacts.get(user, {}).get(resource)
+        if c is None:
+            raise ApiError("http_404", False)
+        return c
+
+    def _check_memberships(self, user, body):
+        known = {"contactGroups/" + g for g in SYSTEM_GROUPS} | set(self.groups.get(user, {}))
+        if any(m["contactGroupMembership"]["contactGroupResourceName"] not in known
+               for m in body.get("memberships", [])):
+            raise ApiError("http_400", False)
+
+    @api
+    def list_contacts(self, user) -> list[dict]:
+        return [{**copy.deepcopy(c), "metadata": {"sources": [{"type": "CONTACT"}]}}
+                for c in self.contacts.get(user, {}).values()]
+
+    @api
+    def count_other_contacts(self, user) -> int:
+        return self.other.get(user, 0)
+
+    @api
+    def list_groups(self, user) -> list[dict]:
+        def count(res):
+            return sum(any(m.get("contactGroupMembership", {}).get("contactGroupResourceName") == res
+                           for m in c.get("memberships", [])) for c in self.contacts.get(user, {}).values())
+
+        return [{"resourceName": "contactGroups/" + g, "name": g, "groupType": "SYSTEM_CONTACT_GROUP",
+                 "memberCount": count("contactGroups/" + g)} for g in SYSTEM_GROUPS] + [
+            {"resourceName": r, "name": n, "groupType": "USER_CONTACT_GROUP", "memberCount": count(r)}
+            for r, n in self.groups.get(user, {}).items()]
+
+    @api
+    def create_group(self, user, name) -> str:
+        for r, n in self.groups.get(user, {}).items():
+            if n.lower() == name.lower():
+                return r
+        return self.add_group(user, name)
+
+    @api
+    def create_contact(self, user, body) -> tuple[str, str]:
+        self._check_memberships(user, body)
+        res = self.add_contact(user, body)
+        return res, self.contacts[user][res]["etag"]
+
+    @api
+    def update_contact(self, user, resource, etag, body) -> str:
+        """The real API answers a stale etag with 400 FAILED_PRECONDITION (to confirm in rehearsal)."""
+        c = self._contact(user, resource)
+        if c["etag"] != etag:
+            raise ApiError("http_400", False)
+        self._check_memberships(user, body)
+        new = self._id("etag")
+        self.contacts[user][resource] = {**copy.deepcopy(body), "resourceName": resource, "etag": new}
+        return new
+
+    @api
+    def get_etag(self, user, resource) -> str:
+        return self._contact(user, resource)["etag"]
+
+
 def make_apis() -> Apis:
     return Apis(src_gmail=FakeGmail(), dst_gmail=FakeGmail(), src_cal=FakeCalendar(), dst_cal=FakeCalendar(),
-                dst_dir=FakeDirectory())
+                dst_dir=FakeDirectory(), src_people=FakePeople(), dst_people=FakePeople())
