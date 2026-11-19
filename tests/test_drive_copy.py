@@ -379,7 +379,7 @@ def test_adopted_refused_conversion_counted_as_office(env):
     a.dst_drive.upload(D, {"appProperties": {SRC_KEY: sid}, "mimeType": DOC}, lambda: iter([b"d"]),
                        EXPORTS[DOC], True)
     led.set_drive(U, sid, state="pending")
-    run(env)
+    assert run(env).kept_as_office == 1
     assert led.drive_rows(U)[sid]["kind"] == "office" and led.get_meta(U, "drive_kept_as_office") == "1"
     a.src_drive.edit(sid, content=b"d2")
     a.dst_drive.fail_next("update_content", ApiError("http_500", False))
@@ -398,3 +398,36 @@ def test_gone_folder_not_trashed_when_move_out_fails(env):
     assert st.files_failed == 1 and not dst_of(env, f)["trashed"] and not dst_of(env, sid)["trashed"]
     assert (led.drive_rows(U)[f]["state"], led.drive_rows(U)[f]["reason"]) == ("done", "contents_not_moved")
     assert run(env).files_trashed == 1 and not dst_of(env, sid)["trashed"]
+
+
+def test_nested_gone_folders_held_when_inner_move_out_fails(env):
+    a, led = env
+    f = a.src_drive.add_folder(S)
+    g = a.src_drive.add_folder(S, f)
+    sid = a.src_drive.add_file(S, PDF, g, b"x")
+    run(env)
+    a.src_drive.set_owner(f, S2)
+    a.src_drive.set_owner(g, S2)
+    a.dst_drive.fail_next("update_meta", ApiError("http_500", False))
+    st = run(env)
+    assert st.files_trashed == 0 and st.files_failed == 2
+    assert not any(dst_of(env, x)["trashed"] for x in (f, g, sid))
+    assert {led.drive_rows(U)[x]["reason"] for x in (f, g)} == {"contents_not_moved"}
+    st = run(env)
+    assert st.files_trashed == 2 and not dst_of(env, sid)["trashed"]
+    assert dst_of(env, sid)["parents"] == [f"root-{D}"]
+
+
+def test_adopted_copy_moved_to_its_folder(env):
+    a, led = env
+    folder = a.src_drive.add_folder(S)
+    sid = a.src_drive.add_file(S, PDF, folder, b"x")
+    run(env)
+    did = dst_of(env, sid)["id"]
+    a.dst_drive.files[did]["parents"] = [f"root-{D}"]  # crashed before the copy reached its folder
+    led.set_drive(U, sid, state="pending")
+    a.dst_drive.calls.clear()
+    st = run(env)
+    assert st.files_moved == 1 and not called(a.dst_drive, "upload")
+    assert a.dst_drive.files[did]["parents"] == [dst_of(env, folder)["id"]]
+    assert led.drive_rows(U)[sid]["dst_id"] == did

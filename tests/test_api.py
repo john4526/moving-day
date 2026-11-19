@@ -405,6 +405,24 @@ def test_drive_add_permission_never_notifies():
     assert svc.perm_calls[0]["sendNotificationEmail"] is False
 
 
+def test_drive_find_and_list_created_only_own_files():
+    queries = []
+
+    class Files:
+        def list(self, **kw):
+            queries.append(kw["q"])
+            return _Req(lambda: {"files": [{"id": "f9"}]})
+
+    class Svc:
+        def files(self):
+            return Files()
+
+    d = _drive(Svc())
+    assert d.find_by_src("u@x", "s1") == "f9" and d.list_created("u@x") == [{"id": "f9"}]
+    assert all(q.startswith("'me' in owners and ") and "trashed=false" in q for q in queries)
+    assert "value='s1'" in queries[0]
+
+
 def test_drive_download_yields_bounded_chunks():
     data = bytes(CHUNK * 2 + 5)
 

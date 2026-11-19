@@ -428,13 +428,14 @@ class Drive(_Google):
 
     def find_by_src(self, user, src_id) -> str | None:
         files = self._call(lambda: self._f(user).list(
-            q=f"appProperties has {{ key='{SRC_KEY}' and value='{src_id}' }} and trashed=false",
+            q=f"'me' in owners and appProperties has {{ key='{SRC_KEY}' and value='{src_id}' }} and trashed=false",
             fields="files(id)", pageSize=1)).get("files", [])
         return files[0]["id"] if files else None
 
     def list_created(self, user) -> list[dict]:
         return self._all(lambda tok: self._f(user).list(
-            q="trashed=false", fields="nextPageToken,files(id,mimeType,parents,md5Checksum,appProperties)",
+            q="'me' in owners and trashed=false",
+            fields="nextPageToken,files(id,mimeType,parents,md5Checksum,appProperties)",
             pageSize=1000, pageToken=tok), "files")
 
     def add_permission(self, user, file_id, perm) -> str:

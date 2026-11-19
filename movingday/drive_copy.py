@@ -137,6 +137,12 @@ def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, 
         gone[sid] = did
     gone_dirs = {did: sid for sid, did in gone.items() if did and rows[sid]["kind"] == "folder"}
     blocked = set()
+
+    def block(dir_did):  # a trashed folder takes its contents along, so every gone folder above is held too
+        while dir_did in gone_dirs and gone_dirs[dir_did] not in blocked:
+            blocked.add(gone_dirs[dir_did])
+            dir_did = (created.get(dir_did, {}).get("parents") or [""])[0]
+
     for csid, crow in ledger.drive_rows(user_key).items():
         cdid = crow["dst_id"]
         old = (created.get(cdid, {}).get("parents") or [""])[0]
@@ -145,7 +151,7 @@ def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, 
         try:
             dst.update_meta(dst_user, cdid, {}, add_parents=dst_root, remove_parents=old)
         except ApiError:
-            blocked.add(gone_dirs[old])
+            block(old)
             continue
         created[cdid]["parents"] = [dst_root]
         ledger.set_drive(user_key, csid, placed=0)
@@ -181,6 +187,14 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
         found = ledger.dst_folder(parent)
         return (found, 1) if found else (dst_root, 0)
 
+    def move(did, dst_parent):
+        """Move a copy to dst_parent from its current destination parent, when they differ."""
+        old_parent = (created.get(did, {}).get("parents") or [dst_root])[0]
+        if old_parent != dst_parent:
+            dst.update_meta(dst_user, did, {}, add_parents=dst_parent, remove_parents=old_parent)
+            created.setdefault(did, {})["parents"] = [dst_parent]
+            st.files_moved += 1
+
     for item in _parents_first(folders) + files:
         sid, mime = item["id"], item["mimeType"]
         row = rows.get(sid)
@@ -212,11 +226,7 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                     dst.update_meta(dst_user, did, {k: item[k] for k in ("name", "description", "starred",
                                                                           "modifiedTime") if k in item})
                     st.files_updated += not folder
-                old_parent = (created.get(did, {}).get("parents") or [dst_root])[0]
-                if old_parent != dst_parent:
-                    dst.update_meta(dst_user, did, {}, add_parents=dst_parent, remove_parents=old_parent)
-                    created.setdefault(did, {})["parents"] = [dst_parent]
-                    st.files_moved += 1
+                move(did, dst_parent)
             else:
                 kind, old_fp, did = ("folder" if folder else "file"), "", None
                 ledger.set_drive(user_key, sid, dst_id="", kind=kind, state="pending")
@@ -224,8 +234,11 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                     for sig in ledger.drive_shares(user_key, sid):
                         ledger.drop_drive_share(user_key, sid, sig)
                     did = dst.find_by_src(dst_user, sid)
+                    if did:
+                        move(did, dst_parent)
                     if did and office and created.get(did, {}).get("mimeType") == office:
                         kind = "office"  # adopted copy whose conversion was refused
+                        st.kept_as_office += 1
                 if not did:
                     meta = {k: item[k] for k in ("name", "description", "starred", "modifiedTime", "createdTime")
                             if k in item}
@@ -238,7 +251,7 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                         if office and not converted:
                             kind = "office"
                             st.kept_as_office += 1
-                created[did] = {"id": did, "parents": [dst_parent]}
+                created.setdefault(did, {"id": did, "parents": [dst_parent]})
                 if folder:
                     st.folders += 1
                 else:
