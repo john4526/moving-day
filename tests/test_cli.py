@@ -1,0 +1,156 @@
+import fcntl
+import json
+
+import pytest
+from fakes import make_apis
+
+from wsmigrate import cli, mail, runtime
+
+RAW = b"Subject: s\r\nMessage-ID: <a@x>\r\nDate: Mon, 1 Jan 2026 00:00:00 +0000\r\n\r\nb\r\n"
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    (tmp_path / "m.csv").write_text(
+        "key,source,destination,batch\n"
+        "u001,a@old.org,a@new.org,b1\n"
+        "u002,b@old.org,b@new.org,b1\n"
+        "u003,c@old.org,c@new.org,b2\n")
+    (tmp_path / "c.toml").write_text(
+        f'source_key_file="s.json"\ndest_key_file="d.json"\nmapping_file="{tmp_path}/m.csv"\n'
+        f'inventory_file="i.json"\nledger_path="{tmp_path}/l.db"\nreport_dir="r"\n'
+        'dest_admin="adm@new.org"\ndest_domain="t.new.org"\nmax_existing=1\n')
+    apis = make_apis()
+    for u in ("a@old.org", "b@old.org", "c@old.org"):
+        for _ in range(2):
+            apis.src_gmail.add_message(u, RAW + bytes([len(apis.src_gmail.messages.get(u, {}))]), ["INBOX"])
+    monkeypatch.setattr(runtime, "get_apis", lambda config: apis)
+    return apis, str(tmp_path / "c.toml"), tmp_path
+
+
+def run(capsys, *argv):
+    code = cli.main(list(argv))
+    cap = capsys.readouterr()
+    return code, [json.loads(l) for l in cap.out.splitlines()], cap
+
+
+def test_check_reports_sizes_per_user_key(env, capsys):
+    _, cfg, _ = env
+    code, out, _ = run(capsys, "check", "--config", cfg)
+    assert code == 0 and out[0]["ok"] is True
+    assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "dst_existing": 0, "ok": True}
+    assert [u["user"] for u in out[0]["users"]] == ["u001", "u002", "u003"]
+
+
+def test_check_profile_failure_continues(env, capsys):
+    apis, cfg, _ = env
+    from wsmigrate.api import ApiError
+    apis.src_gmail.fail_next("profile", ApiError("http_500", False))
+    code, out, _ = run(capsys, "check", "--config", cfg)
+    assert code == 1 and out[0]["ok"] is False
+    assert out[0]["users"][0]["ok"] is False and "reason" in out[0]["users"][0]
+    assert out[0]["users"][1]["ok"] is True
+
+
+def test_check_bad_mapping_exits_2_with_reason_and_row(env, capsys):
+    _, cfg, tmp = env
+    (tmp / "m.csv").write_text("key,source,destination,batch\nxx,a@o,b@n,b1\n")
+    code, out, _ = run(capsys, "check", "--config", cfg)
+    assert code == 2
+    assert out[0] == {"command": "check", "ok": False, "reason": "bad_key", "row": 2}
+
+
+def test_copy_batch_copies_only_that_batch(env, capsys):
+    apis, cfg, _ = env
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 0 and out[0]["ok"] is True and isinstance(out[0]["seconds"], int)
+    assert {u["user"] for u in out[0]["users"]} == {"u001", "u002"}
+    assert out[0]["users"][0]["copied"] == 2
+    assert len(apis.dst_gmail.messages["a@new.org"]) == 2
+    assert "c@new.org" not in apis.dst_gmail.messages
+
+
+def test_copy_mail_only_skips_calendars(env, capsys):
+    apis, cfg, _ = env
+    code, out, _ = run(capsys, "copy", "--batch", "b2", "--mail", "--config", cfg)
+    assert code == 0 and "calendars" not in out[0]["users"][0]
+    assert not [c for c in apis.src_cal.calls if c[0] == "list_calendars"]
+
+
+def test_copy_refuses_when_destination_not_empty(env, capsys):
+    apis, cfg, _ = env
+    for _ in range(3):
+        apis.dst_gmail.add_message("b@new.org", RAW, ["INBOX"])
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 2 and out[0]["reason"] == "destination_not_empty" and out[0]["ok"] is False
+    assert [u["user"] for u in out[0]["users"]] == ["u002"]
+    assert "a@new.org" not in apis.dst_gmail.messages  # nothing copied for anyone
+
+
+def test_allow_existing_overrides_for_named_user(env, capsys):
+    apis, cfg, _ = env
+    for _ in range(3):
+        apis.dst_gmail.add_message("b@new.org", RAW, ["INBOX"])
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--allow-existing", "u002", "--config", cfg)
+    assert code == 0 and len(apis.dst_gmail.messages["a@new.org"]) == 2
+
+
+def test_second_copy_refused_while_first_holds_lock(env, capsys):
+    apis, cfg, tmp = env
+    with open(tmp / "l.db.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 2 and out[0]["reason"] == "already_running"
+    assert "a@new.org" not in apis.dst_gmail.messages
+
+
+def test_status_reads_ledger_without_calling_google(env, capsys):
+    apis, cfg, _ = env
+    run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    for fake in (apis.src_gmail, apis.dst_gmail, apis.src_cal, apis.dst_cal, apis.dst_dir):
+        fake.calls.clear()
+    code, out, _ = run(capsys, "status", "--batch", "b1", "--config", cfg)
+    assert code == 0
+    assert out[0]["users"][0] == {"user": "u001", "copied": 2, "failed": 0, "pending": 0, "failures": {}}
+    assert not any(f.calls for f in (apis.src_gmail, apis.dst_gmail, apis.src_cal, apis.dst_cal, apis.dst_dir))
+
+
+def test_unexpected_error_emits_reason_only(env, capsys, monkeypatch):
+    apis, cfg, _ = env
+
+    def boom(*a, **k):
+        raise RuntimeError("SECRET")
+    monkeypatch.setattr(mail, "copy_mail", boom)
+    code, out, cap = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 1 and "SECRET" not in cap.out + cap.err
+    assert out[0]["users"][0] == {"user": "u001", "ok": False, "reason": "internal_RuntimeError"}
+
+
+def test_top_level_error_emits_reason(env, capsys, monkeypatch):
+    _, cfg, _ = env
+    monkeypatch.setattr(runtime, "get_apis", lambda c: (_ for _ in ()).throw(ValueError("SECRET")))
+    code, out, cap = run(capsys, "check", "--config", cfg)
+    assert code == 1 and "SECRET" not in cap.out + cap.err
+    assert out[0] == {"command": "check", "ok": False, "reason": "internal_ValueError"}
+
+
+def test_no_config_and_bad_arguments(env, capsys, monkeypatch):
+    monkeypatch.delenv("WSMIGRATE_CONFIG", raising=False)
+    code, out, _ = run(capsys, "check")
+    assert code == 2 and out[0]["reason"] == "no_config"
+    code, out, cap = run(capsys, "copy", "--bogus")
+    assert code == 2 and out == [{"ok": False, "reason": "bad_arguments"}] and cap.err == ""
+
+
+def test_config_from_environment(env, capsys, monkeypatch):
+    _, cfg, _ = env
+    monkeypatch.setenv("WSMIGRATE_CONFIG", cfg)
+    code, out, _ = run(capsys, "status")
+    assert code == 0 and len(out[0]["users"]) == 3
+
+
+def test_output_never_contains_addresses(env, capsys):
+    _, cfg, _ = env
+    for argv in (["check"], ["copy", "--batch", "b1"], ["status"]):
+        code, out, cap = run(capsys, *argv, "--config", cfg)
+        assert "@" not in cap.out and cap.err == ""
