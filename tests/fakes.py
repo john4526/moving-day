@@ -214,4 +214,5 @@ class FakeDirectory(_Fake):
 
 
 def make_apis() -> Apis:
-    return Apis(FakeGmail(), FakeGmail(), FakeCalendar(), FakeCalendar(), FakeDirectory())
+    return Apis(src_gmail=FakeGmail(), dst_gmail=FakeGmail(), src_cal=FakeCalendar(), dst_cal=FakeCalendar(),
+                dst_dir=FakeDirectory())

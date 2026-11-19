@@ -26,7 +26,12 @@ def env(tmp_path, monkeypatch):
     for u in ("a@old.org", "b@old.org", "c@old.org"):
         for _ in range(2):
             apis.src_gmail.add_message(u, RAW + bytes([len(apis.src_gmail.messages.get(u, {}))]), ["INBOX"])
-    monkeypatch.setattr(runtime, "get_apis", lambda config: apis)
+    apis.get_apis_calls = []
+
+    def get_apis(config, source_only=False):
+        apis.get_apis_calls.append(source_only)
+        return apis
+    monkeypatch.setattr(runtime, "get_apis", get_apis)
     return apis, str(tmp_path / "c.toml"), tmp_path
 
 
@@ -40,8 +45,66 @@ def test_check_reports_sizes_per_user_key(env, capsys):
     _, cfg, _ = env
     code, out, _ = run(capsys, "check", "--config", cfg)
     assert code == 0 and out[0]["ok"] is True
-    assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "dst_existing": 0, "ok": True}
+    assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "own_calendars": 0, "delegated_calendars": 0,
+                                  "team_calendars": 0, "dst_existing": 0, "ok": True}
     assert [u["user"] for u in out[0]["users"]] == ["u001", "u002", "u003"]
+
+
+def _scan_calendars(apis):
+    G1, G2 = "team@group.calendar.google.com", "solo@group.calendar.google.com"
+    cal = apis.src_cal
+    cal.add_calendar("a@old.org", "a@old.org", primary=True)
+    cal.add_calendar("a@old.org", G1)                                        # co-managed with b
+    cal.add_calendar("a@old.org", G2)                                        # a's own, nobody else
+    cal.add_calendar("a@old.org", "boss@old.org")                            # delegated
+    cal.add_calendar("a@old.org", "room@resource.calendar.google.com")       # resource: neither
+    cal.add_calendar("a@old.org", "viewer@group.calendar.google.com", access_role="reader")
+    cal.add_calendar("b@old.org", "b@old.org", primary=True)
+    cal.add_calendar("b@old.org", G1)
+    cal.add_calendar("b@old.org", G2, access_role="writer")                  # not owner: not b's
+
+
+def test_check_classifies_calendars_and_summarises(env, capsys):
+    apis, cfg, _ = env
+    _scan_calendars(apis)
+    code, out, cap = run(capsys, "check", "--config", cfg)
+    u = {x["user"]: x for x in out[0]["users"]}
+    assert code == 0
+    assert (u["u001"]["own_calendars"], u["u001"]["delegated_calendars"], u["u001"]["team_calendars"]) == (3, 1, 1)
+    assert (u["u002"]["own_calendars"], u["u002"]["delegated_calendars"], u["u002"]["team_calendars"]) == (2, 0, 1)
+    assert (u["u003"]["own_calendars"], u["u003"]["delegated_calendars"], u["u003"]["team_calendars"]) == (0, 0, 0)
+    assert out[0]["summary"] == {"users": 3, "total_messages": 6, "largest_mailbox": 2,
+                                 "accounts_with_delegated": 1, "accounts_with_team_calendars": 2, "failed": 0}
+    assert "@" not in cap.out
+
+
+def test_check_source_only_never_touches_destination(env, capsys):
+    apis, cfg, _ = env
+    code, out, _ = run(capsys, "check", "--source-only", "--config", cfg)
+    assert code == 0 and apis.get_apis_calls == [True]
+    assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "own_calendars": 0,
+                                  "delegated_calendars": 0, "team_calendars": 0, "ok": True}
+    assert apis.dst_gmail.calls == [] and apis.dst_cal.calls == []
+    assert {c[0] for c in apis.src_gmail.calls + apis.src_cal.calls} == {"profile", "list_calendars"}
+
+
+def test_check_failures_count_in_summary(env, capsys):
+    apis, cfg, _ = env
+    apis.src_cal.fail_next("list_calendars", ApiError("http_500", False))
+    code, out, _ = run(capsys, "check", "--source-only", "--config", cfg)
+    assert code == 1 and out[0]["summary"]["failed"] == 1 and out[0]["summary"]["users"] == 3
+    assert out[0]["users"][0]["ok"] is False and "own_calendars" not in out[0]["users"][0]
+    assert out[0]["summary"]["total_messages"] == 4
+
+
+def test_check_does_not_create_or_write_the_ledger(env, capsys):
+    _, cfg, tmp = env
+    run(capsys, "check", "--config", cfg)
+    assert not (tmp / "l.db").exists()
+    run(capsys, "copy", "--batch", "b1", "--mail", "--config", cfg)
+    before = (tmp / "l.db").read_bytes()
+    run(capsys, "check", "--config", cfg)
+    assert (tmp / "l.db").read_bytes() == before
 
 
 def test_check_profile_failure_continues(env, capsys):
@@ -169,14 +232,14 @@ def test_rerun_of_same_batch_is_not_refused(env, capsys):
 
 def test_keyboard_interrupt_emits_interrupted(env, capsys, monkeypatch):
     _, cfg, _ = env
-    monkeypatch.setattr(runtime, "get_apis", lambda c: (_ for _ in ()).throw(KeyboardInterrupt()))
+    monkeypatch.setattr(runtime, "get_apis", lambda c, **k: (_ for _ in ()).throw(KeyboardInterrupt()))
     code, out, cap = run(capsys, "check", "--config", cfg)
     assert code == 1 and out[0]["reason"] == "interrupted" and cap.err == ""
 
 
 def test_top_level_error_emits_reason(env, capsys, monkeypatch):
     _, cfg, _ = env
-    monkeypatch.setattr(runtime, "get_apis", lambda c: (_ for _ in ()).throw(ValueError("SECRET")))
+    monkeypatch.setattr(runtime, "get_apis", lambda c, **k: (_ for _ in ()).throw(ValueError("SECRET")))
     code, out, cap = run(capsys, "check", "--config", cfg)
     assert code == 1 and "SECRET" not in cap.out + cap.err
     assert out[0] == {"command": "check", "ok": False, "reason": "internal_ValueError"}

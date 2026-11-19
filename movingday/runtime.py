@@ -18,17 +18,21 @@ DST_SCOPES = [
 @dataclass
 class Apis:
     src_gmail: Gmail
-    dst_gmail: Gmail
     src_cal: Calendar
-    dst_cal: Calendar
-    dst_dir: Directory
+    dst_gmail: Gmail | None = None
+    dst_cal: Calendar | None = None
+    dst_dir: Directory | None = None
 
 
-def get_apis(config: Config) -> Apis:
+def get_apis(config: Config, source_only: bool = False) -> Apis:
+    """source_only: no destination object is built, so the destination key file is never opened."""
+    src = dict(src_gmail=Gmail(config.source_key_file, SRC_SCOPES),
+               src_cal=Calendar(config.source_key_file, SRC_SCOPES))
+    if source_only:
+        return Apis(**src)
     return Apis(
-        src_gmail=Gmail(config.source_key_file, SRC_SCOPES),
+        **src,
         dst_gmail=Gmail(config.dest_key_file, DST_SCOPES),
-        src_cal=Calendar(config.source_key_file, SRC_SCOPES),
         dst_cal=Calendar(config.dest_key_file, DST_SCOPES),
         dst_dir=Directory(config.dest_key_file, config.dest_admin),
     )

@@ -8,6 +8,7 @@ EVENT_FIELDS = ("summary", "description", "location", "start", "end", "recurrenc
                 "sequence", "originalStartTime", "eventType")
 NONE = {"send_updates": "none"}
 GROUP_SUFFIX = "@group.calendar.google.com"
+RESOURCE_SUFFIX = "@resource.calendar.google.com"
 
 
 @dataclass

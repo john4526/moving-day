@@ -29,7 +29,9 @@ def _parser():
     for name in ("check", "copy", "status", "verify"):
         s = sub.add_parser(name, add_help=False)
         s.add_argument("--config", default=os.environ.get("MOVINGDAY_CONFIG"))
-        if name != "check":
+        if name == "check":
+            s.add_argument("--source-only", action="store_true")
+        else:
             s.add_argument("--batch", required=name in ("copy", "verify"))
         if name == "verify":
             s.add_argument("--expect-changes", action="store_true")
@@ -40,21 +42,48 @@ def _parser():
     return p
 
 
-def _check(config, users):
-    apis = runtime.get_apis(config)
-    out = []
+def _scan_user(apis, u, source_only):
+    """Read-only: profile and calendar list. Returns the entry and the group calendars this user owns."""
+    e = {"user": u.key, "src_messages": apis.src_gmail.profile(u.source)["messagesTotal"]}
+    own = delegated = 0
+    groups = set()
+    for cal in apis.src_cal.list_calendars(u.source):
+        if cal["primary"]:
+            own += 1
+        elif cal["accessRole"] == "owner":
+            if cal["id"].endswith(calendar_copy.GROUP_SUFFIX):
+                own += 1
+                groups.add(cal["id"])
+            elif not cal["id"].endswith(calendar_copy.RESOURCE_SUFFIX):
+                delegated += 1
+    e.update(own_calendars=own, delegated_calendars=delegated)
+    if not source_only:
+        e["dst_existing"] = apis.dst_gmail.profile(u.destination)["messagesTotal"]
+    return e, groups
+
+
+def _check(config, users, source_only=False):
+    apis = runtime.get_apis(config, source_only=source_only)
+    out, owned = [], {}
     for u in users:
-        e = {"user": u.key}
         try:
-            e["src_messages"] = apis.src_gmail.profile(u.source)["messagesTotal"]
-            e["dst_existing"] = apis.dst_gmail.profile(u.destination)["messagesTotal"]
+            e, owned[u.key] = _scan_user(apis, u, source_only)
             e["ok"] = True
         except Exception as exc:
-            e.update(ok=False, reason=reason_for(exc))
+            e = {"user": u.key, "ok": False, "reason": reason_for(exc)}
         out.append(e)
-    bad = any(not e["ok"] for e in out)
-    emit({"command": "check", "ok": not bad, "users": out})
-    return 1 if bad else 0
+    for e in out:
+        if e["ok"]:
+            e["team_calendars"] = sum(
+                any(g in other for k, other in owned.items() if k != e["user"]) for g in owned[e["user"]])
+    good = [e for e in out if e["ok"]]
+    summary = {"users": len(users), "total_messages": sum(e["src_messages"] for e in good),
+               "largest_mailbox": max((e["src_messages"] for e in good), default=0),
+               "accounts_with_delegated": sum(e["delegated_calendars"] > 0 for e in good),
+               "accounts_with_team_calendars": sum(e["team_calendars"] > 0 for e in good),
+               "failed": len(out) - len(good)}
+    emit({"command": "check", "ok": not summary["failed"], "users": out, "summary": summary})
+    return 1 if summary["failed"] else 0
 
 
 def _copy_user(config, u, do_mail, do_cal, mapping):
@@ -198,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             return _verify(config, a)
         users = mapping.batch(a.batch) if getattr(a, "batch", None) else mapping.users
         if name == "check":
-            return _check(config, users)
+            return _check(config, users, a.source_only)
         if name == "status":
             return _status(config, users)
         return _copy(config, mapping, a)

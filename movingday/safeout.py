@@ -7,7 +7,8 @@ ALLOWED_KEYS = frozenset(
     "command batch user ok reason row found copied skipped failed remaining pending "
     "src_messages dst_existing calendars events_copied events_updated events_removed "
     "events_failed acl_copied outside_shares no_date_header threads_src threads_dst "
-    "users passed failed_checks checks name failures report seconds".split()
+    "users own_calendars delegated_calendars team_calendars summary total_messages largest_mailbox "
+    "accounts_with_delegated accounts_with_team_calendars passed failed_checks checks name failures report seconds".split()
 )
 _SAFE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 
