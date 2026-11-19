@@ -66,7 +66,7 @@ def _tally(events):
     return len(events), sum("recurrence" in e for e in events), sum(len(e.get("attendees", ())) for e in events)
 
 
-def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user) -> CalResult:
+def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain) -> CalResult:
     r = CalResult()
     cmap = ledger.cal_map(user_key)
     dst_list = dst.list_calendars(dst_user)
@@ -80,7 +80,8 @@ def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user) ->
         r.events_src, r.series_src, r.attendees_src = (
             a + b for a, b in zip((r.events_src, r.series_src, r.attendees_src), _tally(ev)))
         wanted = {(role, typ, (val or "").lower())
-                  for role, typ, val, _ in translate_rules(src.list_acl(src_user, cal["id"]), mapping, src_user, dst_user)}
+                  for role, typ, val, _ in translate_rules(
+                      src.list_acl(src_user, cal["id"]), mapping, src_user, dst_user, dest_domain)}
         target = cmap.get(key)
         if target is None or not (dst_has_primary if target == "primary" else target in dst_cals):
             r.acl_missing += len(wanted)

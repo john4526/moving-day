@@ -97,7 +97,7 @@ def ledger(cfg):
 
 
 @pytest.fixture(scope="session")
-def results(apis, ledger, mapping):
+def results(cfg, apis, ledger, mapping):
     """One MailResult and one CalResult per user; a comparison that raised is not repeated."""
     cache = {}
 
@@ -109,7 +109,8 @@ def results(apis, ledger, mapping):
                     cache[kind, u.key] = compare_mail(apis.src_gmail, apis.dst_gmail, u.source, u.destination, pre)
                 else:
                     cache[kind, u.key] = compare_calendar(
-                        apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination)
+                        apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination,
+                        cfg.dest_domain)
             except Exception as exc:
                 cache[kind, u.key] = exc
         r = cache[kind, u.key]

@@ -69,8 +69,10 @@ def _events(src, dst, ledger, user_key, src_user, dst_user, key, src_cal, dst_ca
             st.events_failed += 1
 
 
-def translate_rules(src_rules, mapping, src_user, dst_user):
-    """Yield (role, scope type, value or None, outside) for each source rule that is to be copied."""
+def translate_rules(src_rules, mapping, src_user, dst_user, dest_domain):
+    """Yield (role, scope type, value or None, outside) for each source rule that is to be copied.
+    Users map through the mapping; our source domain(s) and groups on them move to dest_domain."""
+    src_domains = {u.source.split("@")[1] for u in mapping.users}
     for r in src_rules:
         typ, val = r["scope"]["type"], r["scope"].get("value")
         if val and val.lower() == src_user.lower():
@@ -83,15 +85,23 @@ def translate_rules(src_rules, mapping, src_user, dst_user):
             if val.lower() == dst_user.lower():
                 continue
             outside = not mapped
+        elif typ == "domain":
+            outside = val.lower() not in src_domains
+            val = val if outside else dest_domain
+        elif typ == "group":
+            local, _, domain = val.partition("@")
+            outside = domain.lower() not in src_domains
+            val = val if outside else f"{local}@{dest_domain}"
         yield r["role"], typ, val, outside
 
 
-def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st) -> int:
+def _sharing(src, dst, mapping, src_user, dst_user, dest_domain, src_cal, dst_cal, st) -> int:
     """Returns the number of rules whose insert failed."""
     failed = 0
     have = {(r["role"], r["scope"]["type"], r["scope"].get("value", "").lower())
             for r in dst.list_acl(dst_user, dst_cal)}
-    for role, typ, val, outside in translate_rules(src.list_acl(src_user, src_cal), mapping, src_user, dst_user):
+    for role, typ, val, outside in translate_rules(
+            src.list_acl(src_user, src_cal), mapping, src_user, dst_user, dest_domain):
         st.outside_shares += outside
         sig = (role, typ, (val or "").lower())
         if sig in have:
@@ -123,7 +133,7 @@ def select_calendars(src, ledger, user_key, src_user):
     return out, skipped
 
 
-def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user) -> CalStats:
+def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain) -> CalStats:
     st = CalStats()
     cmap = ledger.cal_map(user_key)
     acl_failed = 0
@@ -135,7 +145,7 @@ def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user) -> C
             cmap[key] = "primary" if cal["primary"] else dst.create_calendar(dst_user, cal["summary"], cal["timeZone"])
             ledger.set_cal(user_key, key, cmap[key])
         _events(src, dst, ledger, user_key, src_user, dst_user, key, cal["id"], cmap[key], st)
-        acl_failed += _sharing(src, dst, mapping, src_user, dst_user, cal["id"], cmap[key], st)
+        acl_failed += _sharing(src, dst, mapping, src_user, dst_user, dest_domain, cal["id"], cmap[key], st)
     ledger.set_meta(user_key, "outside_shares", str(st.outside_shares))
     ledger.set_meta(user_key, "acl_failed", str(acl_failed))
     ledger.set_meta(user_key, "shared_calendars_skipped", str(skipped))

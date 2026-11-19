@@ -134,7 +134,7 @@ def cal(env):
 
 
 def cmp_cal(a, led):
-    return compare_calendar(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    return compare_calendar(a.src_cal, a.dst_cal, led, MAP, U, S, D, "y.org")
 
 
 def test_calendar_counts_match_after_copy(cal):
@@ -145,7 +145,7 @@ def test_calendar_counts_match_after_copy(cal):
     a.src_cal.add_event(S, S, {"summary": "x", "id": "x1", "status": "cancelled", "recurringEventId": "r1"})
     a.src_cal.add_event(S, G, {"summary": "q"})
     a.src_cal.add_acl(S, G, {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
-    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D, "y.org")
     r = cmp_cal(a, led)
     assert (r.calendars_src, r.calendars_dst) == (2, 2)
     assert (r.events_src, r.events_dst) == (3, 3)
@@ -182,10 +182,12 @@ def test_missing_share_counted(cal):
     a.src_cal.add_acl(S, S, {"role": "owner", "scope": {"type": "user", "value": S}})  # skipped
     a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
     a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "domain", "value": "x.org"}})
-    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D, "y.org")
     assert cmp_cal(a, led).acl_missing == 0
     a.dst_cal.cals[D][D]["acl"].pop()
     assert cmp_cal(a, led).acl_missing == 1
+    a.dst_cal.add_acl(D, D, {"role": "reader", "scope": {"type": "domain", "value": "x.org"}})
+    assert cmp_cal(a, led).acl_missing == 1  # the untranslated source domain does not count
 
 
 def test_inventory_missing_group_member_and_alias_counted(tmp_path):
@@ -227,7 +229,7 @@ def test_event_missing_not_hidden_by_extra_event(cal):
     a, led = cal
     for n in range(2):
         a.src_cal.add_event(S, S, {"summary": "s", "id": f"e{n}"})
-    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D, "y.org")
     evs = a.dst_cal.cals[D][D]["events"]
     del evs[next(iter(evs))]
     a.dst_cal.add_event(D, D, {"summary": "unrelated"})
@@ -256,11 +258,11 @@ def test_group_calendar_owned_by_two_users_copied_once(cal):
     for u in (S, P):  # one team calendar, co-managed: both see it with accessRole owner
         a.src_cal.add_calendar(u, G, summary="Team")
         a.src_cal.add_event(u, G, {"summary": "q", "id": "g1"})
-    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
-    copy_calendars(a.src_cal, a.dst_cal, led, MAP, "u002", P, PD)
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D, "y.org")
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, "u002", P, PD, "y.org")
     assert len(a.dst_cal.cals[D]) == 2 and len(a.dst_cal.cals[PD]) == 1
     assert led.get_meta(U, "shared_calendars_skipped") == "0"
     assert led.get_meta("u002", "shared_calendars_skipped") == "1"
     for key, su, du, n in ((U, S, D, 2), ("u002", P, PD, 1)):
-        r = compare_calendar(a.src_cal, a.dst_cal, led, MAP, key, su, du)
+        r = compare_calendar(a.src_cal, a.dst_cal, led, MAP, key, su, du, "y.org")
         assert (r.calendars_src, r.calendars_dst, r.events_missing, r.acl_missing) == (n, n, 0, 0)

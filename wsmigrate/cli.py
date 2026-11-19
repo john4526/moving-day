@@ -68,7 +68,8 @@ def _copy_user(config, u, do_mail, do_cal, mapping):
                     apis.src_gmail, apis.dst_gmail, ledger, u.key, u.source, u.destination)))
             if do_cal:
                 e.update(asdict(calendar_copy.copy_calendars(
-                    apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination)))
+                    apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination,
+                    config.dest_domain)))
             # unsupported event types are retried every run; they are not failures (R5)
             e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"}
             return e

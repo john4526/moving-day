@@ -23,7 +23,7 @@ def env(tmp_path):
 
 def run(env):
     a, led = env
-    return copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    return copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D, "y.org")
 
 
 def dst_events(a, cal=D):
@@ -118,8 +118,32 @@ def test_sharing_translated_through_mapping(env):
     assert st.acl_copied == 2 and st.outside_shares == 0
     assert a.dst_cal.cals[D][D]["acl"] == [
         {"role": "reader", "scope": {"type": "user", "value": "pal@y.org"}},
-        {"role": "reader", "scope": {"type": "domain", "value": "x.org"}}]
+        {"role": "reader", "scope": {"type": "domain", "value": "y.org"}}]
     assert run(env).acl_copied == 0  # already present
+
+
+def test_source_domain_and_group_shares_translated(env):
+    a, led = env
+    a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "domain", "value": "X.org"}})
+    a.src_cal.add_acl(S, S, {"role": "writer", "scope": {"type": "group", "value": "staff@x.org"}})
+    st = run(env)
+    assert (st.acl_copied, st.outside_shares) == (2, 0)
+    assert a.dst_cal.cals[D][D]["acl"] == [
+        {"role": "reader", "scope": {"type": "domain", "value": "y.org"}},
+        {"role": "writer", "scope": {"type": "group", "value": "staff@y.org"}}]
+
+
+def test_outside_domain_and_group_shares_kept_and_counted(env):
+    a, led = env
+    a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "domain", "value": "parent.org"}})
+    a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "group", "value": "all@parent.org"}})
+    a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "default"}})
+    st = run(env)
+    assert (st.acl_copied, st.outside_shares) == (3, 2)
+    assert led.get_meta(U, "outside_shares") == "2"
+    assert [r["scope"] for r in a.dst_cal.cals[D][D]["acl"]] == [
+        {"type": "domain", "value": "parent.org"}, {"type": "group", "value": "all@parent.org"},
+        {"type": "default"}]
 
 
 def test_unmapped_share_kept_and_counted(env):
@@ -220,7 +244,7 @@ def test_failed_acl_insert_counted_and_loop_continues(env):
     st = run(env)
     assert st.acl_copied == 1
     assert led.get_meta(U, "acl_failed") == "1"
-    assert a.dst_cal.cals[D][D]["acl"] == [{"role": "reader", "scope": {"type": "domain", "value": "x.org"}}]
+    assert a.dst_cal.cals[D][D]["acl"] == [{"role": "reader", "scope": {"type": "domain", "value": "y.org"}}]
     assert sum(m == "insert_acl" for m, _ in a.dst_cal.calls) == 2
     run(env)  # retried next run
     assert led.get_meta(U, "acl_failed") == "0" and len(a.dst_cal.cals[D][D]["acl"]) == 2
