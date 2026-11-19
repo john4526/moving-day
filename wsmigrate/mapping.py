@@ -66,6 +66,8 @@ def load_mapping(path: str) -> Mapping:
                 raise MappingError("same_source_and_destination", row)
             if not c["batch"]:
                 raise MappingError("empty_batch", row)
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", c["batch"]):  # batch names appear in output
+                raise MappingError("bad_batch", row)
             keys.add(c["key"]); sources.add(c["source"]); dests.add(c["destination"])
             users.append(User(**c))
     return Mapping(users)

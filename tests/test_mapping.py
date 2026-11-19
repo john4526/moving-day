@@ -76,3 +76,12 @@ def test_excel_export_is_normalised(tmp_path):
 def test_duplicates_differing_only_by_case_rejected(tmp_path):
     fails(tmp_path, "u001,sam@old.org,a@y.org,b1\nu002,SAM@old.org,b@y.org,b1\n",
           "duplicate_source", 3)
+
+
+@pytest.mark.parametrize("batch", ["b 1", "b/1", "<b>", "x" * 41, "bé"])
+def test_bad_batch(tmp_path, batch):
+    fails(tmp_path, f"u001,a@x.org,a@y.org,{batch}\n", "bad_batch", 2)
+
+
+def test_batch_with_dot_dash_underscore_accepted(tmp_path):
+    assert load_mapping(write(tmp_path, f"u001,a@x.org,a@y.org,Wave_1.a-{'x' * 31}\n")).users[0].batch
