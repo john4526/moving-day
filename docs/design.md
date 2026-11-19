@@ -325,11 +325,23 @@ These were made while building the tool. Approved sections above are unchanged.
   only totals.
 - Label check: a label with fewer messages on the destination is always a
   mismatch. The welcome-mail allowance only covers extra messages.
-- The inventory file must have exactly the columns `type,address,parent`.
-  Anything else stops `verify` with a reason.
-- Failed calendar shares are counted internally in the ledger (`acl_failed`,
-  not shown in output) and are caught by the sharing check, which compares
-  the source's sharing rules with the destination's.
+- The inventory file must have the columns `type,address,parent` (letter
+  case ignored). A wrong header or an unknown type fails the inventory check
+  (`"passed": false`) with the reason (`missing_column`, `bad_type`) in the
+  report; it does not stop `verify`.
+- Failed calendar shares are counted in the ledger (`acl_failed`, shown in
+  the report's carried-over notes) and are caught by the sharing check, which
+  compares the source's sharing rules with the destination's.
+- Calendars copied are each user's primary calendar and team (group)
+  calendars they own or manage, each copied once across all users by the
+  first to claim it; other people's calendars shared with "manage sharing"
+  and resource calendars are skipped and counted (`shared_calendars_skipped`).
+- Domain-wide and group calendar shares on our source domain are moved to
+  `dest_domain`; shares to other domains and groups are kept and counted as
+  outside shares.
+- The report has an informational "carried over notes" row per user: split
+  threads, messages with no Date header, unsupported calendar entries not
+  copied, outside shares, failed shares and shared calendars skipped.
 - Unsupported calendar entry types (out-of-office, focus time, working
   location, birthdays) are reported, not treated as failures.
 - `--help` is disabled; every output is one JSON line.

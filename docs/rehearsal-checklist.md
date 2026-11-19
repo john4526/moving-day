@@ -20,6 +20,11 @@ an item says "else", the fallback is named.
   all sessions signed out).
 - [ ] Phones and mail apps are cut off by the lockout.
 - [ ] A suspended account blocks the tool (so suspension must not be used).
+- [ ] The source history id stays the same on an idle locked-out account
+  over several hours (otherwise the freeze check fails with no real change).
+- [ ] Mail sent by parent-organisation staff to our users during the freeze
+  does not pass through the queue. Confirm whether it arrives in the old
+  account, and so would be missed by the copy.
 
 ## C. Mail
 
@@ -35,6 +40,10 @@ an item says "else", the fallback is named.
 - [ ] Measured messages per second per mailbox: ______
 - [ ] Measured messages per second per mailbox with `parallel_users = 4`:
   ______
+- [ ] Insert accepts the system labels `SENT`, `IMPORTANT` and `CATEGORY_*`.
+- [ ] Fetching chat messages in raw format works.
+- [ ] Whether Gmail adds its own Message-ID to an inserted message that has
+  none.
 
 ## D. Calendar
 
@@ -48,10 +57,19 @@ an item says "else", the fallback is named.
   happens (they are reported, not treated as failures).
 - [ ] Exceptions to recurring events stay linked to their series.
 - [ ] Cancelled single occurrences of a recurring meeting stay cancelled on
-  the destination.
+  the destination. If import rejects them for a missing iCalUID, start or
+  end, the fix is to give them the series' iCalUID.
 - [ ] Hidden calendars a user owns are copied.
 - [ ] Meetings after the practice domain move: what happens when the
   organiser's address changes?
+- [ ] Delegated and co-managed calendars: an assistant's view of the
+  director's calendar is skipped (not copied into the assistant's account),
+  and a team calendar managed by several people is copied once.
+- [ ] Domain-wide and group calendar sharing: the translated rules (our
+  domain and our groups moved to the destination domain) are accepted.
+  Recheck them after the practice domain move.
+- [ ] Calendar `403 quotaExceeded` is not retried by the tool. Note it here
+  if seen.
 
 ## E. Directory
 
@@ -75,6 +93,8 @@ Use the commands from `docs/operator-setup.md`, section 7.
   account). Include the user with the largest mailbox.
 - [ ] 3. `copy --batch NAME`. Record the `seconds` value printed.
 - [ ] 4. `verify --batch NAME --expect-changes`. Note the report file name.
+  Time it on the largest mailbox: in the real cutover `verify` runs inside
+  the mail outage. Time taken: ______
 - [ ] 5. Open the HTML report. Confirm every row shows Condition, Expected
   and Actual, and that no correspondent address, subject or event title
   appears anywhere in it.

@@ -7,12 +7,24 @@ numbered. Words in `code style` are typed exactly as shown.
 ## Who does what
 
 - **Jonathon does all the setup and security steps by hand.** This includes
-  the new Mac user, the sudoers line, file permissions, service accounts and
+  the two new Mac users, the sudoers line, file permissions, service accounts and
   delegation. These change the Mac's security settings and the Google
   accounts' access. **An agent must not make any of these changes**, even if
   asked to, and even if a step seems to be failing.
 - **The agent only runs the four `wsmigrate` commands** (see "Running the
   tool") and reports what they print.
+
+There are three Mac users:
+
+| Mac user | Who uses it | What for |
+|---|---|---|
+| Jonathon's own account (administrator) | Jonathon | Setup, and reading reports. Nothing else. |
+| `wsagent` (standard, not administrator) | The AI agent | Running the four `wsmigrate` commands, and nothing else. |
+| `wsmigrate` (standard, not administrator) | The tool itself | Owns the keys, mapping, ledger and reports. Nobody signs in as it. |
+
+**The agent must not run under Jonathon's account.** Jonathon's account is an
+administrator and can read everything, so an agent running there would not
+be kept from the keys or the data.
 
 ## 1. Create the service accounts (administrators of each account)
 
@@ -59,12 +71,12 @@ Notes:
 - The destination also needs an administrator address in the config
   (`dest_admin`). The tool uses it for directory lookups.
 
-## 2. Create the separate Mac user (Jonathon, by hand)
+## 2. Create the two Mac users (Jonathon, by hand)
 
-The tool runs as its own Mac user, `wsmigrate`. The agent runs as Jonathon's
-user and can run the tool as `wsmigrate`, but cannot open `wsmigrate`'s
-files. That is how the agent is kept from seeing keys, mapping files or
-reports.
+The tool runs as its own Mac user, `wsmigrate`. The agent runs as a second
+Mac user, `wsagent`. `wsagent` can run the tool as `wsmigrate`, but cannot
+open `wsmigrate`'s files. That is how the agent is kept from seeing keys,
+mapping files or reports.
 
 **These are changes to the Mac's security settings. Jonathon makes them. An
 agent must not.**
@@ -73,6 +85,9 @@ agent must not.**
    Settings, then Users & Groups. Give it a long random password and do not
    save it anywhere the agent can read. Its home folder is
    `/Users/wsmigrate`.
+   Create a second standard (not administrator) user named `wsagent` the
+   same way. The agent runs under this user. Never tell the agent either
+   password, and never make `wsagent` an administrator.
 2. In a Terminal, make its home folder private:
 
    ```
@@ -115,20 +130,23 @@ agent must not.**
    ```
 
    The last command should show `drwx------` for every folder.
+   The config file and the mapping file must be owned by `wsmigrate` and
+   must not be writable by anyone else. The tool checks this every time it
+   starts and refuses with the reason `untrusted_file` (exit 2) otherwise.
+   This stops anyone pointing `--config` at a file of their own.
 7. Keep the Mac awake for the whole copy (System Settings, then Lock Screen
    or Battery, or `caffeinate`).
 
-## 3. Let the operator's user run only the tool (Jonathon, by hand)
+## 3. Let the agent's user run only the tool (Jonathon, by hand)
 
-This sudoers line lets Jonathon's Mac user run exactly one program, as
-`wsmigrate`, and nothing else. Replace `jonathon` with the short name of
-Jonathon's Mac user. The agent runs under this user.
+This sudoers line lets the `wsagent` Mac user run exactly one program, as
+`wsmigrate`, and nothing else. The agent runs under `wsagent`.
 
-For the file protection to hold, that Mac user must **not** be an
-administrator and must **not** have passwordless sudo for anything else. It
-must never be given Jonathon's password or the `wsmigrate` password. If it
-can become root or the `wsmigrate` user in any other way, it can read the
-keys and the data.
+For the file protection to hold, `wsagent` must **not** be an administrator
+and must **not** have passwordless sudo for anything else. It must never be
+given Jonathon's password, the `wsagent` password or the `wsmigrate`
+password. If it can become root or the `wsmigrate` user in any other way, it
+can read the keys and the data.
 
 Edit it with `visudo`, which checks the syntax before saving. A typo in a
 sudoers file can lock you out of `sudo`.
@@ -140,12 +158,13 @@ sudo visudo -f /etc/sudoers.d/wsmigrate
 Put this single line in the file:
 
 ```
-jonathon ALL=(wsmigrate) NOPASSWD: /Users/wsmigrate/venv/bin/wsmigrate
+wsagent ALL=(wsmigrate) NOPASSWD: /Users/wsmigrate/venv/bin/wsmigrate
 ```
 
-Save and exit. Then test it:
+Save and exit. Then test it, signed in as `wsagent`:
 
 ```
+cd /
 sudo -u wsmigrate /Users/wsmigrate/venv/bin/wsmigrate check --config /Users/wsmigrate/data/config.toml
 ```
 
@@ -181,7 +200,9 @@ CSV at the `mapping_file` path. The header must contain the four column names
 below. Extra columns are ignored. The key is the letter `u` followed by
 exactly three digits (`u001`, `u002`, ...). It is the user's permanent name
 inside the tool. Keys, source addresses and destination addresses must each be unique.
-Batch names are free text, for example `mock` or `all`.
+Batch names may use letters, digits, dot, dash and underscore, up to 40
+characters, for example `mock` or `all`. Anything else stops the tool with
+the reason `bad_batch`.
 
 ```
 key,source,destination,batch
@@ -190,18 +211,38 @@ u002,sam@example.org,sam@mig-b.example.org,mock
 ```
 
 If a row is wrong, the tool stops and prints a reason (for example
-`duplicate_key`, `bad_address`, `empty_batch`) and the row number.
+`duplicate_key`, `bad_address`, `empty_batch`, `bad_batch`) and the row
+number.
+
+### Moving from the mock to the cutover
+
+The ledger remembers what has already been copied for each user. Decide per
+volunteer what happens to their mock copy:
+
+- **Destination account deleted and recreated:** the old ledger rows would
+  make the tool skip mail that is no longer there. Use a fresh
+  `ledger_path` (or a new config file with a new `ledger_path`) for the
+  cutover.
+- **Mock copy kept and topped up:** stay on the old ledger. Put these users
+  in their own batch, and verify that batch with `--expect-changes` (their
+  source mailbox changed between the mock and the cutover).
 
 ## 6. The inventory file
 
 CSV at the `inventory_file` path, written by the parent organisation's
-administrator. The header must be exactly `type,address,parent`. Anything
-else stops `verify` with a reason. Types are `user`, `group`, `member` and
+administrator. The header must be `type,address,parent` (letter case does
+not matter). Types are `user`, `group`, `member` and
 `alias`. Use source-side addresses; the tool swaps the domain for
 `dest_domain` when it checks the destination. The check matches by the part
 before the `@`, so it only works when a person's source and destination
-addresses share that part (`alex@` on both sides). A row with any other type
-stops `verify` with the reason `bad_type`.
+addresses share that part (`alex@` on both sides). A wrong header or a row
+with any other type does not stop `verify`: the inventory check fails
+(`"passed": false`) and the report shows the reason (`missing_column` or
+`bad_type`).
+
+List only members on our own domain in `member` rows. Members from the
+parent organisation or outside will never exist on the destination and would
+show as missing.
 
 - `user`: `parent` is empty.
 - `group`: `parent` is empty.
@@ -218,9 +259,12 @@ Group aliases are not checked by the tool. Check those by hand.
 
 ## 7. Running the tool
 
-All commands take `--config PATH`. The agent runs them in this form only:
+All commands take `--config PATH`. The agent runs them in this form only,
+from a folder the `wsmigrate` user can read (run `cd /` first; the agent's
+own home folder is private to `wsagent`):
 
 ```
+cd /
 sudo -u wsmigrate /Users/wsmigrate/venv/bin/wsmigrate COMMAND --config /Users/wsmigrate/data/config.toml [options]
 ```
 
@@ -239,6 +283,14 @@ else.
 - Run only one `wsmigrate` process per ledger file at a time. `copy` takes a
   lock and refuses with `already_running` if another copy is running. Do not
   run `verify` for a batch while `copy` is running on it.
+- **A copy can take days.** The agent starts `copy` in the background (so it
+  keeps running when the agent's turn ends) and checks progress with
+  `status` from time to time. `status` only reads the ledger and is safe
+  while `copy` runs.
+- **Stopping a copy:** Ctrl-C does not stop a running copy promptly; the
+  users already being copied finish first. To stop it, kill the `wsmigrate`
+  process. Resuming later is safe: run the same `copy` again and it carries
+  on where it stopped.
 - **Exit codes:**
   - `0`: success.
   - `1`: finished with failures, interrupted, or an unexpected error. A bad
@@ -246,7 +298,9 @@ else.
     exit 1 with a reason such as `internal_ValueError` or
     `internal_FileNotFoundError`.
   - `2`: refused to run (bad arguments, no config option, bad mapping,
-    unknown batch, destination not empty, already running).
+    config or mapping file not owned by `wsmigrate` or writable by others
+    (`untrusted_file`), unknown batch, destination not empty, already
+    running).
 - **On any exit code other than 0 the agent stops and asks Jonathon.** For
   `verify`, `"passed": false` or `failed_checks` above 0 also means stop. The
   agent does not retry or work around it.
@@ -255,15 +309,24 @@ else.
 
 Output uses user keys (`u001`), never addresses. Some fields you may see:
 
-- `outside_shares`: shares to people who are not in the mapping file (for
-  example parent-organisation staff). They are kept as they are and counted.
+- `outside_shares`: shares to people, groups or domains outside our own
+  (for example parent-organisation staff). They are kept as they are and
+  counted. Shares to our own domain, and to groups on it, are moved to
+  `dest_domain`.
 
-Two counters are kept internally in the ledger and are **not shown in any
-output**: `acl_failed` (calendar shares that failed to copy) and
-`no_date_header` (messages with no Date header; they are copied but show a
-different date). A failed share is still caught, because the `verify` sharing
-check compares the source's sharing rules with the destination's and counts
-any that are missing.
+Calendars: each user's primary calendar is copied, and each team (group)
+calendar they own or manage is copied once, by the first user who reaches
+it. Other people's calendars that a user can manage (for example an
+assistant's view of the director's calendar) and room or resource calendars
+are skipped and counted.
+
+These counts are not in the JSON output but are shown in the report's
+"carried over notes" row for each user, for information: split threads,
+messages with no Date header (copied, but showing a different date),
+calendar entries of unsupported types not copied, outside shares, shares
+that failed to copy, and shared calendars skipped. A failed share is also
+caught by the `verify` sharing check, which compares the source's sharing
+rules with the destination's.
 
 ### Where the report is
 
@@ -281,9 +344,10 @@ Paste this block into the agent's instructions.
 ```
 You run the wsmigrate migration tool. Follow these rules exactly.
 
-1. Run only commands of this form:
+1. Run only commands of this form, after "cd /":
    sudo -u wsmigrate /Users/wsmigrate/venv/bin/wsmigrate COMMAND --config /Users/wsmigrate/data/config.toml [options]
    COMMAND is one of: check, copy, status, verify. Nothing else.
+   Start "copy" in the background and check on it with "status".
 2. Never read, list, copy or open any file under /Users/wsmigrate.
 3. Never edit sudoers, file permissions, users or any Mac security setting.
    Never ask for, use or store any password. Your Mac user is not an
@@ -334,4 +398,5 @@ Do this in order, by hand.
 
 6. Delete the `wsmigrate` Mac user, including its home folder (System
    Settings, then Users & Groups, then delete the user and its folder). This
-   removes the mapping, inventory, ledger and config.
+   removes the mapping, inventory, ledger and config. Delete the `wsagent`
+   Mac user too.
