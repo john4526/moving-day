@@ -42,6 +42,7 @@ def _parser():
             s.add_argument("--contacts", action="store_true")
             s.add_argument("--drive", action="store_true")
             s.add_argument("--allow-existing", nargs="+", default=[], metavar="KEY")
+            s.add_argument("--allow-trash", nargs="+", default=[], metavar="KEY")
     return p
 
 
@@ -111,7 +112,7 @@ def _check(config, users, source_only=False):
     return 1 if summary["failed"] else 0
 
 
-def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping):
+def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping, allow_trash=False):
     try:
         ledger = Ledger(config.ledger_path)
         try:
@@ -132,7 +133,7 @@ def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping):
             if do_drive:  # prefixed: calendars already use outside_shares
                 e.update({f"drive_{k}": v for k, v in asdict(drive_copy.copy_drive(
                     apis.src_drive, apis.dst_drive, ledger, mapping, u.key, u.source, u.destination,
-                    config.dest_domain)).items()})
+                    config.dest_domain, allow_trash)).items()})
             # unsupported event types are retried every run; they are not failures (R5). Unsupported Drive
             # types, forms and files kept as Office files are never in the failed state.
             e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"} and not e.get("drive_trash_held")
@@ -172,7 +173,7 @@ def _copy(config, mapping, a):
         with ThreadPoolExecutor(max_workers=config.parallel_users) as pool:
             results = list(pool.map(
                 lambda u: _copy_user(config, u, a.mail or both, a.calendar or both, a.contacts or both,
-                                     a.drive or both, mapping), users))
+                                     a.drive or both, mapping, u.key in a.allow_trash), users))
         bad = any(not r["ok"] for r in results)
         emit({"command": "copy", "ok": not bad, "batch": a.batch, "users": results,
               "seconds": round(time.monotonic() - t0)})

@@ -324,7 +324,7 @@ sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/mo
 | Command | What it does |
 |---|---|
 | `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts, contact and other-contact counts, Drive counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
-| `copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...]` | Copies. With none of `--mail`, `--calendar`, `--contacts` and `--drive` it copies all four. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
+| `copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...] [--allow-trash KEY ...]` | Copies. With none of `--mail`, `--calendar`, `--contacts` and `--drive` it copies all four. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. A user whose Drive trashing was held (`too_many_gone`) has it released for that run only if their key is listed after `--allow-trash`. |
 | `status [--batch NAME]` | Prints copied, failed and pending counts per user. |
 | `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account (and Drive files still change). |
 
@@ -357,6 +357,13 @@ else.
 - **On any exit code other than 0 the agent stops and asks Jonathon.** For
   `verify`, `"passed": false` or `failed_checks` above 0 also means stop. The
   agent does not retry or work around it.
+- **`too_many_gone` (Drive trashing held).** The source listed nothing for
+  that person, or more than half of their copies would go to the trash, so
+  nothing was trashed. Jonathon checks the source account: if the files
+  were really deleted or given away, he tells the agent to re-run that
+  batch with `--allow-trash KEY` for that person. It lifts the hold for
+  that run only; trashed copies can be restored from the destination trash
+  for 30 days. The agent never adds `--allow-trash` on its own.
 
 ### What the output means
 

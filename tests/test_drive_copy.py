@@ -484,6 +484,18 @@ def test_trash_held_when_more_than_half_gone(env):
     assert st.trash_held == 0 and st.files_trashed == 1 and led.get_meta(U, "drive_trash_held") == "no"
 
 
+def test_allow_trash_overrides_the_guard(env):
+    a, led = env
+    ids = [a.src_drive.add_file(S, PDF, content=b"x") for _ in range(2)]
+    run(env)
+    for sid in ids:
+        a.src_drive.files[sid]["trashed"] = True
+    assert run(env).trash_held == 1
+    st = copy_drive(a.src_drive, a.dst_drive, led, MAP, U, S, D, "y.org", allow_trash=True)
+    assert st.trash_held == 0 and st.files_trashed == 2 and led.get_meta(U, "drive_trash_held") == "no"
+    assert all(led.drive_rows(U)[sid]["state"] == "trashed" for sid in ids)
+
+
 def test_adopted_copy_keeps_dst_id_when_move_fails(env):
     a, led = env
     folder = a.src_drive.add_folder(S)

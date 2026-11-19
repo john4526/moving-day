@@ -387,6 +387,18 @@ def test_drive_trash_held_makes_copy_not_ok(env, capsys):
     assert code == 1 and u["ok"] is False and u["reason"] == "too_many_gone" and u["drive_trash_held"] == 1
 
 
+def test_allow_trash_releases_the_hold_for_named_user_only(env, capsys):
+    apis, cfg, _ = env
+    sid = apis.src_drive.add_file("a@old.org", PDF, content=b"x")
+    run(capsys, "copy", "--batch", "b1", "--drive", "--config", cfg)
+    apis.src_drive.files[sid]["trashed"] = True
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--drive", "--allow-trash", "u002", "--config", cfg)
+    assert code == 1 and out[0]["users"][0]["reason"] == "too_many_gone"  # u001 not named: still held
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--drive", "--allow-trash", "u001", "--config", cfg)
+    u = out[0]["users"][0]
+    assert code == 0 and u["ok"] is True and u["drive_trash_held"] == 0 and u["drive_files_trashed"] == 1
+
+
 def test_check_reports_drive_counts_and_summary(env, capsys):
     apis, cfg, _ = env
     d = apis.src_drive

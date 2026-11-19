@@ -135,7 +135,7 @@ disabled. Exit codes: 0 success, 1 finished with failures, 2 refused to run.
 - `movingday check [--source-only] --config PATH` : validates the mapping and
   access for all users and scans each account (messages, calendars,
   contacts, Drive); no data moves. `--source-only` needs only the source key.
-- `movingday copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...] --config PATH` :
+- `movingday copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...] [--allow-trash KEY ...] --config PATH` :
   copies (mail, calendars, contacts and Drive if no part flag is given); safe
   to re-run. Drive is pre-copied in the week before cutover and topped up in
   the freeze

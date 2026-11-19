@@ -527,7 +527,9 @@ ledger, so a re-run brings the destination back in step with the source:
   mapping file, that person's run copies it as a new file. If the source
   lists nothing for a person who has copies, or more than half of a
   person's copies would go, nothing is trashed for that person that run:
-  the run is not ok, with reason `too_many_gone`, and a person decides.
+  the run is not ok, with reason `too_many_gone`, and a person decides: if the deletions are real, they re-run with `copy --allow-trash KEY`,
+  which lifts the hold for that person for that run only (your decision,
+  19 Nov).
 - **New file**: copied as usual.
 
 The source is never changed, so the pre-copy is safe while people work. The

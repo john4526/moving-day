@@ -117,15 +117,16 @@ def _parents_first(folders: list[dict]) -> list[dict]:
     return out
 
 
-def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, st):
+def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, st, allow_trash=False):
     """Trash the copy of every item no longer owned. Runs after the item loop, so files moved out of a gone
     folder on the source are moved first. Trashing a folder trashes its contents, so this user's copies still
     inside a gone folder are first moved to the top (placed=0; re-placed if the folder comes back under
     another owner); a folder whose move-out failed is not trashed this run. If the source lists nothing while
-    copies exist, or more than half of this user's copies are gone, nothing is trashed and a person decides."""
+    copies exist, or more than half of this user's copies are gone, nothing is trashed and a person decides;
+    allow_trash (that person's go-ahead, for this run only) lifts the hold."""
     done = [sid for sid, row in rows.items() if row["state"] == "done"]
     gone_done = sum(sid not in live for sid in done)
-    held = bool(done) and (not live or gone_done * 2 > len(done))
+    held = not allow_trash and bool(done) and (not live or gone_done * 2 > len(done))
     ledger.set_meta(user_key, "drive_trash_held", "too_many_gone" if held else "no")
     if held:
         st.trash_held = 1
@@ -180,7 +181,8 @@ def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, 
         ledger.set_drive(user_key, sid, dst_id=did, state="trashed")
 
 
-def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain) -> DriveStats:
+def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain,
+               allow_trash: bool = False) -> DriveStats:
     st = DriveStats()
     items = src.list_owned(src_user)
     folders = [i for i in items if i["mimeType"] == FOLDER]
@@ -274,7 +276,8 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
             ledger.set_drive(user_key, sid, state="failed", reason=e.reason)
             st.files_failed += 1
 
-    _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, {i["id"] for i in items}, created, st)
+    _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, {i["id"] for i in items}, created, st,
+                allow_trash)
     final = ledger.drive_rows(user_key).values()
     for name, value in (("drive_unsupported", st.unsupported), ("drive_forms", st.forms),
                         ("drive_kept_as_office", sum(r["kind"] == "office" and r["state"] in ("done", "failed")
