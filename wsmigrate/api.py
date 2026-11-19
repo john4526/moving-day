@@ -3,6 +3,7 @@
 Real wrappers are first exercised in the rehearsal; see docs/rehearsal-checklist.md.
 """
 import base64
+import http.client
 import json
 import ssl
 import threading
@@ -66,7 +67,8 @@ def _execute(make_request):
     except HttpError as e:
         raise _to_api_error(e) from None
     # socket.timeout is TimeoutError
-    except (TimeoutError, ConnectionError, httplib2.ServerNotFoundError, ssl.SSLError, TransportError):
+    except (TimeoutError, ConnectionError, http.client.HTTPException, httplib2.ServerNotFoundError, ssl.SSLError,
+            TransportError):
         raise ApiError("network_error", True) from None
 
 

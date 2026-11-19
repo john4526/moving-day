@@ -157,3 +157,18 @@ def test_network_errors_map_to_retryable_api_error():
         _execute(Req)
     assert (e.value.reason, e.value.retryable) == ("network_error", True)
     assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
+def test_incomplete_read_maps_to_retryable_network_error():
+    import http.client
+
+    from wsmigrate.api import _execute
+
+    class Req:
+        def execute(self):
+            raise http.client.IncompleteRead(b"partial body")
+
+    with pytest.raises(ApiError) as e:
+        _execute(Req)
+    assert (e.value.reason, e.value.retryable) == ("network_error", True)
+    assert e.value.__cause__ is None and e.value.__suppress_context__
