@@ -4,10 +4,13 @@ Real wrappers are first exercised in the rehearsal; see docs/rehearsal-checklist
 """
 import base64
 import json
+import ssl
 import threading
 import time
 from dataclasses import dataclass
 
+import httplib2
+from google.auth.exceptions import TransportError
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -62,7 +65,8 @@ def _execute(make_request):
         return make_request().execute()
     except HttpError as e:
         raise _to_api_error(e) from None
-    except (TimeoutError, ConnectionError):  # socket.timeout is TimeoutError
+    # socket.timeout is TimeoutError
+    except (TimeoutError, ConnectionError, httplib2.ServerNotFoundError, ssl.SSLError, TransportError):
         raise ApiError("network_error", True) from None
 
 
@@ -176,7 +180,7 @@ class Calendar(_Google):
     _api, _version = "calendar", "v3"
 
     def list_calendars(self, user) -> list[dict]:
-        cals = self._all(lambda tok: self._svc(user).calendarList().list(pageToken=tok), "items")
+        cals = self._all(lambda tok: self._svc(user).calendarList().list(showHidden=True, pageToken=tok), "items")
         return [{"id": c["id"], "summary": c.get("summary", ""), "timeZone": c.get("timeZone"),
                  "primary": c.get("primary", False), "accessRole": c.get("accessRole")} for c in cals]
 

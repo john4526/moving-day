@@ -3,11 +3,13 @@ import copy
 import datetime
 import functools
 import inspect
+import itertools
 from email.parser import BytesHeaderParser
 
 from wsmigrate.api import ApiError, RawMessage
 from wsmigrate.runtime import Apis
 
+_ids = itertools.count(1)  # shared by every fake, so source and destination never issue the same id
 SYSTEM_LABELS = ["INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT", "CHAT"]
 
 
@@ -31,15 +33,13 @@ class _Fake:
     def __init__(self):
         self.calls = []
         self._fail = {}
-        self._n = 0
 
     def fail_next(self, method, error, times=1):
         """error: any BaseException instance or class."""
         self._fail.setdefault(method, []).extend([error] * times)
 
     def _id(self, prefix):
-        self._n += 1
-        return f"{prefix}{self._n}"
+        return f"{prefix}{next(_ids)}"
 
 
 class FakeGmail(_Fake):
@@ -56,6 +56,11 @@ class FakeGmail(_Fake):
         }
         self.history += 1
         return msg_id
+
+    def add_label(self, user, name) -> str:
+        i = self._id("Label_")
+        self.labels.setdefault(user, {})[i] = name
+        return i
 
     def _get(self, user, msg_id):
         m = self.messages.get(user, {}).get(msg_id)
@@ -86,9 +91,7 @@ class FakeGmail(_Fake):
         for i, n in labels.items():
             if n.lower() == name.lower():
                 return i
-        i = self._id("Label_")
-        labels[i] = name
-        return i
+        return self.add_label(user, name)
 
     @api
     def list_messages(self, user) -> list[tuple[str, str]]:
@@ -107,6 +110,8 @@ class FakeGmail(_Fake):
 
     @api
     def insert(self, user, raw, label_ids, thread_id) -> tuple[str, str]:
+        if any(i not in SYSTEM_LABELS and i not in self.labels.get(user, {}) for i in label_ids):
+            raise ApiError("http_400", False)
         msg_id = self.add_message(user, raw, label_ids, thread_id)
         return msg_id, self.messages[user][msg_id]["thread"]
 
@@ -161,7 +166,7 @@ class FakeCalendar(_Fake):
     @api
     def list_events(self, user, cal_id) -> list[dict]:
         return [copy.deepcopy(e) for e in self._cal(user, cal_id)["events"].values()
-                if e.get("status") != "cancelled"]
+                if e.get("status") != "cancelled" or e.get("recurringEventId")]
 
     @api
     def import_event(self, user, cal_id, body, *, send_updates) -> str:

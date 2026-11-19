@@ -112,3 +112,48 @@ def test_http_errors_map_by_status_without_response_text():
     assert got == [("rate_limited", True), ("rate_limited", True), ("http_403", False),
                    ("http_503", True), ("http_404", False)]
     assert "secret" not in str(err(500)) + repr(err(500))
+
+
+def test_fake_list_events_keeps_cancelled_instances_only():
+    c = FakeCalendar()
+    c.add_calendar("a@x", "cal1")
+    series = c.add_event("a@x", "cal1", {"summary": "s"})
+    c.add_event("a@x", "cal1", {"status": "cancelled"})
+    inst = c.add_event("a@x", "cal1", {"status": "cancelled", "recurringEventId": series,
+                                       "originalStartTime": {"dateTime": "2026-01-02T10:00:00Z"}})
+    assert [e["id"] for e in c.list_events("a@x", "cal1")] == [series, inst]
+
+
+def test_fake_ids_are_unique_across_instances():
+    a = make_apis()
+    src = {a.src_gmail.add_message("u@x", RAW, []), a.src_gmail.add_label("u@x", "L"),
+           a.src_cal.create_calendar("u@x", "S", "UTC")}
+    dst = {a.dst_gmail.add_message("u@x", RAW, []), a.dst_gmail.add_label("u@x", "L"),
+           a.dst_cal.create_calendar("u@x", "S", "UTC")}
+    assert not src & dst
+
+
+def test_fake_insert_rejects_unknown_label_ids():
+    a = make_apis()
+    src_label = a.src_gmail.add_label("u@x", "Work")
+    assert a.src_gmail.calls == []  # seeding is not recorded
+    with pytest.raises(ApiError) as e:
+        a.dst_gmail.insert("u@x", RAW, ["INBOX", src_label], None)
+    assert e.value.reason == "http_400"
+    dst_label = a.dst_gmail.create_label("u@x", "Work")
+    a.dst_gmail.insert("u@x", RAW, ["INBOX", dst_label], None)
+
+
+def test_network_errors_map_to_retryable_api_error():
+    import httplib2
+
+    from wsmigrate.api import _execute
+
+    class Req:
+        def execute(self):
+            raise httplib2.ServerNotFoundError("host secret.example")
+
+    with pytest.raises(ApiError) as e:
+        _execute(Req)
+    assert (e.value.reason, e.value.retryable) == ("network_error", True)
+    assert e.value.__cause__ is None and e.value.__suppress_context__
