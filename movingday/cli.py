@@ -135,7 +135,9 @@ def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping):
                     config.dest_domain)).items()})
             # unsupported event types are retried every run; they are not failures (R5). Unsupported Drive
             # types, forms and files kept as Office files are never in the failed state.
-            e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"}
+            e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"} and not e.get("drive_trash_held")
+            if e.get("drive_trash_held"):
+                e["reason"] = "too_many_gone"
             return e
         finally:
             ledger.close()

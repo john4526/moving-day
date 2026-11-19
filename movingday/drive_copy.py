@@ -30,6 +30,7 @@ class DriveStats:
     unsupported: int = 0
     forms: int = 0
     unplaced: int = 0
+    trash_held: int = 0  # 1: too many copies would go to the trash this run, so none did (too_many_gone)
     shares_added: int = 0
     shares_removed: int = 0
     shares_failed: int = 0
@@ -76,9 +77,9 @@ def _wanted(src, mapping, src_user, dst_user, dest_domain, sid, st) -> dict[str,
 def _sharing(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain, sid, did, old_fp, st):
     wanted = _wanted(src, mapping, src_user, dst_user, dest_domain, sid, st)
     fp = share_fp(wanted)
-    if fp == old_fp:
+    have = ledger.drive_shares(user_key, sid)  # local, so failed adds and removals are retried every run
+    if fp == old_fp and wanted.keys() == have.keys():
         return
-    have = ledger.drive_shares(user_key, sid)
     failed = 0
     for sig in wanted.keys() - have.keys():
         try:
@@ -96,8 +97,7 @@ def _sharing(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domai
         ledger.drop_drive_share(user_key, sid, sig)
         st.shares_removed += 1
     st.shares_failed += failed
-    if not failed:
-        ledger.set_drive(user_key, sid, share_fp=fp)
+    ledger.set_drive(user_key, sid, share_fp=fp)
 
 
 def _parents_first(folders: list[dict]) -> list[dict]:
@@ -121,7 +121,15 @@ def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, 
     """Trash the copy of every item no longer owned. Runs after the item loop, so files moved out of a gone
     folder on the source are moved first. Trashing a folder trashes its contents, so this user's copies still
     inside a gone folder are first moved to the top (placed=0; re-placed if the folder comes back under
-    another owner); a folder whose move-out failed is not trashed this run."""
+    another owner); a folder whose move-out failed is not trashed this run. If the source lists nothing while
+    copies exist, or more than half of this user's copies are gone, nothing is trashed and a person decides."""
+    done = [sid for sid, row in rows.items() if row["state"] == "done"]
+    gone_done = sum(sid not in live for sid in done)
+    held = bool(done) and (not live or gone_done * 2 > len(done))
+    ledger.set_meta(user_key, "drive_trash_held", "too_many_gone" if held else "no")
+    if held:
+        st.trash_held = 1
+        return
     gone = {}
     for sid, row in rows.items():
         if sid in live or row["state"] == "trashed":
@@ -189,7 +197,7 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
 
     def move(did, dst_parent):
         """Move a copy to dst_parent from its current destination parent, when they differ."""
-        old_parent = (created.get(did, {}).get("parents") or [dst_root])[0]
+        old_parent = (created.get(did, {}).get("parents") or [""])[0]  # "": no parent, so add only
         if old_parent != dst_parent:
             dst.update_meta(dst_user, did, {}, add_parents=dst_parent, remove_parents=old_parent)
             created.setdefault(did, {})["parents"] = [dst_parent]
@@ -235,6 +243,7 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                         ledger.drop_drive_share(user_key, sid, sig)
                     did = dst.find_by_src(dst_user, sid)
                     if did:
+                        ledger.set_drive(user_key, sid, dst_id=did)  # so a failed move can't orphan the copy
                         move(did, dst_parent)
                     if did and office and created.get(did, {}).get("mimeType") == office:
                         kind = "office"  # adopted copy whose conversion was refused

@@ -218,7 +218,7 @@ def test_carried_over_notes_shows_counts_for_information(env, capfd):
         "shared calendars skipped: 3", "other contacts not copied: 0",
         "contacts removed on source: 0", "Drive unsupported files not copied: 0", "Drive forms not copied: 0",
         "Drive files kept as Office files: 0", "Drive files unplaced: 0", "Drive outside shares: 0",
-        "Drive failed shares: 0", "Drive files moved to destination trash: 0",
+        "Drive failed shares: 0", "Drive files moved to destination trash: 0", "Drive trashing held: no",
         "Comments, suggestions and version history are not carried over."]
 
 

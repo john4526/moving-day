@@ -1,6 +1,7 @@
 import pytest
 from fakes import make_apis
 
+from movingday.api import ApiError
 from movingday.calendar_copy import copy_calendars
 from movingday.contacts import copy_contacts
 from movingday.compare import (InventoryError, compare_calendar, compare_contacts, compare_drive, compare_inventory,
@@ -462,3 +463,43 @@ def test_compare_drive_counts_files_whose_folder_is_not_copied(drv):
     copy_drv(a, led)
     r = cmp_drv(a, led)
     assert (r.folder_not_copied, r.out_of_step, r.files_missing) == (1, 0, 0)
+
+
+def test_compare_drive_failed_share_not_out_of_step(drv):
+    a, led = drv
+    sid = next(i for i, f in a.src_drive.files.items() if f["mimeType"] == PDF)
+    a.src_drive.share(S, sid, {"role": "reader", "type": "user", "emailAddress": "pal@x.org"})
+    a.dst_drive.fail_next("add_permission", ApiError("http_500", False))
+    copy_drv(a, led)
+    r = cmp_drv(a, led)
+    assert (r.out_of_step, r.acl_missing) == (0, 1)
+
+
+def test_compare_drive_failed_row_stale_version_not_out_of_step(drv):
+    a, led = drv
+    copy_drv(a, led)
+    sid = next(i for i, f in a.src_drive.files.items() if f["mimeType"] == PDF)
+    a.src_drive.edit(sid, content=b"changed")
+    a.dst_drive.fail_next("update_content", ApiError("http_500", False))
+    copy_drv(a, led)
+    assert led.drive_rows(U)[sid]["state"] == "failed"
+    r = cmp_drv(a, led)
+    assert (r.out_of_step, r.files_missing) == (0, 1)
+
+
+def test_compare_drive_reshare_only_in_step_check(drv):
+    a, led = drv
+    copy_drv(a, led)
+    doc = next(i for i, f in a.src_drive.files.items() if f["mimeType"] == DOC)
+    a.src_drive.share(S, doc, {"role": "reader", "type": "anyone"})
+    r = cmp_drv(a, led)
+    assert (r.out_of_step, r.acl_missing, r.acl_extra) == (1, 0, 0)
+
+
+def test_compare_drive_counts_only_tagged_destination_files(drv):
+    a, led = drv
+    copy_drv(a, led)
+    a.dst_drive.add_file(D, PDF, content=b"the person's own")  # listed under the full drive scope
+    a.dst_drive.add_folder(D)
+    r = cmp_drv(a, led)
+    assert (r.files_dst, r.folders_dst) == (3, 1)

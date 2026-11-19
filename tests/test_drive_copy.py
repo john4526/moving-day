@@ -37,6 +37,12 @@ def dst_of(env, sid, user_key=U):
     return a.dst_drive.files[led.drive_rows(user_key)[sid]["dst_id"]]
 
 
+def pad(env, n=2):
+    """Unchanging files, so a small deletion stays under the mass-trash guard."""
+    for _ in range(n):
+        env[0].src_drive.add_file(S, PDF, content=b"p")
+
+
 def called(fake, *names):
     return [c for c in fake.calls if c[0] in names]
 
@@ -254,6 +260,7 @@ def test_topup_share_added_and_removed(env):
 
 def test_source_deleted_goes_to_destination_trash(env):
     a, led = env
+    pad(env)
     sid = a.src_drive.add_file(S, PDF, content=b"x")
     run(env)
     a.src_drive.files[sid]["trashed"] = True
@@ -261,10 +268,12 @@ def test_source_deleted_goes_to_destination_trash(env):
     assert st.files_trashed == 1 and dst_of(env, sid)["trashed"] is True
     assert led.drive_rows(U)[sid]["state"] == "trashed" and led.get_meta(U, "drive_trashed") == "1"
     assert called(a.dst_drive, "trash")[0][1]["user"] == D
+    assert st.trash_held == 0 and led.get_meta(U, "drive_trash_held") == "no"
 
 
 def test_owner_change_trashes_then_other_user_copies(env):
     a, led = env
+    pad(env)
     sid = a.src_drive.add_file(S, PDF, content=b"x")
     run(env)
     old = dst_of(env, sid)["id"]
@@ -316,6 +325,7 @@ def test_ledger_holds_no_names(env):
 
 def test_restored_on_source_copied_again_with_sharing(env):
     a, led = env
+    pad(env)
     sid = a.src_drive.add_file(S, PDF, content=b"x")
     a.src_drive.share(S, sid, {"role": "reader", "type": "user", "emailAddress": S2})
     run(env)
@@ -332,6 +342,7 @@ def test_restored_on_source_copied_again_with_sharing(env):
 
 def test_folders_given_away_keep_child_copies_live(env):
     a, led = env
+    pad(env)
     f = a.src_drive.add_folder(S)
     g = a.src_drive.add_folder(S, f)
     sid = a.src_drive.add_file(S, PDF, g, b"x")
@@ -402,6 +413,7 @@ def test_gone_folder_not_trashed_when_move_out_fails(env):
 
 def test_nested_gone_folders_held_when_inner_move_out_fails(env):
     a, led = env
+    pad(env)
     f = a.src_drive.add_folder(S)
     g = a.src_drive.add_folder(S, f)
     sid = a.src_drive.add_file(S, PDF, g, b"x")
@@ -431,3 +443,71 @@ def test_adopted_copy_moved_to_its_folder(env):
     assert st.files_moved == 1 and not called(a.dst_drive, "upload")
     assert a.dst_drive.files[did]["parents"] == [dst_of(env, folder)["id"]]
     assert led.drive_rows(U)[sid]["dst_id"] == did
+
+
+def test_failed_share_fingerprint_stored_and_retried(env):
+    a, led = env
+    sid = a.src_drive.add_file(S, PDF, content=b"x")
+    a.src_drive.share(S, sid, {"role": "reader", "type": "user", "emailAddress": S2})
+    a.dst_drive.fail_next("add_permission", ApiError("http_500", False))
+    assert run(env).shares_failed == 1
+    assert led.drive_rows(U)[sid]["share_fp"] != ""  # stored, so compare sees no drift
+    assert run(env).shares_added == 1  # retried: the local share list is short of the wanted one
+    a.dst_drive.calls.clear()
+    run(env)
+    assert not called(a.dst_drive, *WRITES)
+
+
+def test_trash_held_when_source_lists_nothing(env):
+    a, led = env
+    ids = [a.src_drive.add_file(S, PDF, content=b"x") for _ in range(3)]
+    run(env)
+    for sid in ids:
+        a.src_drive.files[sid]["trashed"] = True
+    st = run(env)
+    assert st.trash_held == 1 and st.files_trashed == 0 and not called(a.dst_drive, "trash")
+    assert led.get_meta(U, "drive_trash_held") == "too_many_gone"
+    assert all(led.drive_rows(U)[sid]["state"] == "done" for sid in ids)
+
+
+def test_trash_held_when_more_than_half_gone(env):
+    a, led = env
+    ids = [a.src_drive.add_file(S, PDF, content=b"x") for _ in range(3)]
+    run(env)
+    for sid in ids[:2]:
+        a.src_drive.files[sid]["trashed"] = True
+    st = run(env)
+    assert st.trash_held == 1 and not called(a.dst_drive, "trash")
+    assert led.get_meta(U, "drive_trash_held") == "too_many_gone"
+    a.src_drive.files[ids[1]]["trashed"] = False  # one of three gone: under the guard
+    st = run(env)
+    assert st.trash_held == 0 and st.files_trashed == 1 and led.get_meta(U, "drive_trash_held") == "no"
+
+
+def test_adopted_copy_keeps_dst_id_when_move_fails(env):
+    a, led = env
+    folder = a.src_drive.add_folder(S)
+    sid = a.src_drive.add_file(S, PDF, folder, b"x")
+    run(env)
+    did = dst_of(env, sid)["id"]
+    a.dst_drive.files[did]["parents"] = [f"root-{D}"]
+    led.set_drive(U, sid, state="pending")
+    a.dst_drive.fail_next("update_meta", ApiError("http_500", False))
+    run(env)
+    row = led.drive_rows(U)[sid]
+    assert (row["state"], row["dst_id"]) == ("failed", did)
+
+
+def test_copy_with_no_parent_moved_by_adding_only(env):
+    a, led = env
+    folder = a.src_drive.add_folder(S)
+    sid = a.src_drive.add_file(S, PDF, folder, b"x")
+    run(env)
+    did = dst_of(env, sid)["id"]
+    a.dst_drive.files[did]["parents"] = []
+    led.set_drive(U, sid, state="pending")
+    a.dst_drive.calls.clear()
+    run(env)
+    move = called(a.dst_drive, "update_meta")[0][1]
+    assert move["remove_parents"] == "" and move["add_parents"] == dst_of(env, folder)["id"]
+    assert a.dst_drive.files[did]["parents"] == [dst_of(env, folder)["id"]]

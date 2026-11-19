@@ -45,7 +45,7 @@ class RawMessage:
     thread_id: str
 
 
-_RATE_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+_RATE_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "sharingRateLimitExceeded"}
 
 
 def _to_api_error(e: HttpError) -> ApiError:

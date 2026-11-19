@@ -108,8 +108,9 @@ def test_http_errors_map_by_status_without_response_text():
         return _to_api_error(HttpError(httplib2.Response({"status": status}), body, uri="https://g/secret"))
 
     got = [(e.reason, e.retryable) for e in
-           (err(429), err(403, "userRateLimitExceeded"), err(403), err(503), err(404))]
-    assert got == [("rate_limited", True), ("rate_limited", True), ("http_403", False),
+           (err(429), err(403, "userRateLimitExceeded"), err(403, "sharingRateLimitExceeded"), err(403), err(503),
+            err(404))]
+    assert got == [("rate_limited", True), ("rate_limited", True), ("rate_limited", True), ("http_403", False),
                    ("http_503", True), ("http_404", False)]
     assert "secret" not in str(err(500)) + repr(err(500))
 

@@ -524,7 +524,10 @@ ledger, so a re-run brings the destination back in step with the source:
   days, and counted. *My call:* leaving it would show people files they
   had deleted. Nothing is ever permanently deleted, and only files the tool
   created can be trashed. If ownership moved to another person in the
-  mapping file, that person's run copies it as a new file.
+  mapping file, that person's run copies it as a new file. If the source
+  lists nothing for a person who has copies, or more than half of a
+  person's copies would go, nothing is trashed for that person that run:
+  the run is not ok, with reason `too_many_gone`, and a person decides.
 - **New file**: copied as usual.
 
 The source is never changed, so the pre-copy is safe while people work. The

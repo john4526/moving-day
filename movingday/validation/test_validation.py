@@ -182,7 +182,8 @@ def test_carried_over_notes(mail, ledger, user, record_property):
     no Date header, calendar entries of unsupported types not copied, shares outside our domain, shares that
     failed, calendars shared with the user that were skipped, other contacts (not copied), contacts removed
     on the source since an earlier run, and Drive: unsupported files and forms not copied, files kept as Office
-    files, unplaced files, outside and failed shares, and copies moved to the destination trash."""
+    files, unplaced files, outside and failed shares, copies moved to the destination trash, and whether
+    trashing was held because too many copies were gone."""
     def meta(name):
         return ledger.get_meta(user.key, name) or "not recorded"
 
@@ -201,5 +202,6 @@ def test_carried_over_notes(mail, ledger, user, record_property):
              f"Drive outside shares: {meta('drive_outside_shares')}",
              f"Drive failed shares: {meta('drive_shares_failed')}",
              f"Drive files moved to destination trash: {meta('drive_trashed')}",
+             f"Drive trashing held: {meta('drive_trash_held')}",
              "Comments, suggestions and version history are not carried over."]
     _show(record_property, EXPECTED["test_carried_over_notes"], "\n".join(notes))

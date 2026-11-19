@@ -377,6 +377,16 @@ def test_failed_drive_file_makes_copy_not_ok(env, capsys):
     assert code == 1 and out[0]["users"][0]["ok"] is False and out[0]["users"][0]["drive_files_failed"] == 1
 
 
+def test_drive_trash_held_makes_copy_not_ok(env, capsys):
+    apis, cfg, _ = env
+    sid = apis.src_drive.add_file("a@old.org", PDF, content=b"x")
+    run(capsys, "copy", "--batch", "b1", "--drive", "--config", cfg)
+    apis.src_drive.files[sid]["trashed"] = True
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--drive", "--config", cfg)
+    u = out[0]["users"][0]
+    assert code == 1 and u["ok"] is False and u["reason"] == "too_many_gone" and u["drive_trash_held"] == 1
+
+
 def test_check_reports_drive_counts_and_summary(env, capsys):
     apis, cfg, _ = env
     d = apis.src_drive

@@ -3,6 +3,7 @@ import csv
 from collections import Counter
 from dataclasses import dataclass
 
+from movingday.api import SRC_KEY
 from movingday.calendar_copy import select_calendars, translate_rules
 from movingday.drive_copy import (EXPORTS, FOLDER, GOOGLE, DriveStats, _wanted, drive_rules, share_fp,
                                   share_sig)
@@ -143,7 +144,8 @@ def compare_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_
     r = DriveResult()
     items = src.list_owned(src_user)
     rows = ledger.drive_rows(user_key)
-    created = {f["id"]: f for f in dst.list_created(dst_user)}
+    # under the full drive scope fallback list_created returns every owned file; count only our copies
+    created = {f["id"]: f for f in dst.list_created(dst_user) if SRC_KEY in (f.get("appProperties") or {})}
     r.folders_dst = sum(f["mimeType"] == FOLDER for f in created.values())
     r.files_dst = len(created) - r.folders_dst
     for item in items:
@@ -159,8 +161,11 @@ def compare_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_
             r.files_missing += not folder
             continue
         wanted = set(_wanted(src, mapping, src_user, dst_user, dest_domain, sid, DriveStats()))
-        r.out_of_step += (item.get("version") != row["src_version"] or share_fp(wanted) != row["share_fp"]
-                          or (item.get("parents") or [""])[0] != row["src_parent"])
+        # a failed row is counted in files_missing and the failed check; its stale version is not drift
+        drift = row["state"] == "done" and (item.get("version") != row["src_version"]
+                                            or share_fp(wanted) != row["share_fp"]
+                                            or (item.get("parents") or [""])[0] != row["src_parent"])
+        r.out_of_step += drift
         copy = created.get(row["dst_id"]) if row["state"] == "done" else None
         if copy is None:
             r.files_missing += not folder
@@ -168,6 +173,8 @@ def compare_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_
         # against the source checksum as copied, so a source edit since shows in out_of_step, not here
         if row["md5"] and copy.get("md5Checksum") != row["md5"]:
             r.checksum_mismatches += 1
+        if drift:  # a source change since the copy (e.g. a re-share) is reported only by the in-step check
+            continue
         have = {share_sig(x["role"], x["scope"]["type"], x["scope"].get("value"),
                           x["discoverable"] if x["scope"]["type"] in ("anyone", "domain") else False)
                 for x in drive_rules(dst.list_permissions(dst_user, copy["id"]))}
