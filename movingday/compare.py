@@ -4,6 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 
 from movingday.calendar_copy import select_calendars, translate_rules
+from movingday.drive_copy import (EXPORTS, FOLDER, GOOGLE, DriveStats, _wanted, drive_rules, share_fp,
+                                  share_sig)
 from movingday.mail import SKIP_LABELS, _hash_header
 
 
@@ -121,6 +123,60 @@ def compare_contacts(src, dst, ledger, user_key, src_user, dst_user) -> ContactR
     wanted = {g["name"].lower(): g["memberCount"] for g in src.list_groups(src_user) if g["groupType"] == user}
     return ContactResult(len(contacts), len(dst_contacts), missing, len(wanted),
                          sum(k in have for k in wanted), sum(have.get(k, -1) < n for k, n in wanted.items()))
+
+
+@dataclass
+class DriveResult:
+    files_src: int = 0
+    files_dst: int = 0
+    files_missing: int = 0
+    folders_src: int = 0
+    folders_dst: int = 0
+    checksum_mismatches: int = 0
+    acl_missing: int = 0
+    acl_extra: int = 0
+    out_of_step: int = 0
+    folder_not_copied: int = 0  # done rows with placed=0: their folder was never copied; informational
+
+
+def compare_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain) -> DriveResult:
+    r = DriveResult()
+    items = src.list_owned(src_user)
+    rows = ledger.drive_rows(user_key)
+    created = {f["id"]: f for f in dst.list_created(dst_user)}
+    r.folders_dst = sum(f["mimeType"] == FOLDER for f in created.values())
+    r.files_dst = len(created) - r.folders_dst
+    for item in items:
+        sid, folder = item["id"], item["mimeType"] == FOLDER
+        row = rows.get(sid)
+        if item["mimeType"].startswith(GOOGLE) and not folder and item["mimeType"] not in EXPORTS:
+            r.out_of_step += not row  # unsupported: never copied, so only a missing row is out of step
+            continue
+        r.folders_src += folder
+        r.files_src += not folder
+        if not row:
+            r.out_of_step += 1
+            r.files_missing += not folder
+            continue
+        wanted = set(_wanted(src, mapping, src_user, dst_user, dest_domain, sid, DriveStats()))
+        r.out_of_step += (item.get("version") != row["src_version"] or share_fp(wanted) != row["share_fp"]
+                          or (item.get("parents") or [""])[0] != row["src_parent"])
+        copy = created.get(row["dst_id"]) if row["state"] == "done" else None
+        if copy is None:
+            r.files_missing += not folder
+            continue
+        # against the source checksum as copied, so a source edit since shows in out_of_step, not here
+        if row["md5"] and copy.get("md5Checksum") != row["md5"]:
+            r.checksum_mismatches += 1
+        have = {share_sig(x["role"], x["scope"]["type"], x["scope"].get("value"),
+                          x["discoverable"] if x["scope"]["type"] in ("anyone", "domain") else False)
+                for x in drive_rules(dst.list_permissions(dst_user, copy["id"]))}
+        r.acl_missing += len(wanted - have)
+        r.acl_extra += len(have - wanted)
+    live = {i["id"] for i in items}
+    r.out_of_step += sum(row["state"] == "done" and sid not in live for sid, row in rows.items())
+    r.folder_not_copied = sum(row["state"] == "done" and not row["placed"] for row in rows.values())
+    return r
 
 
 class InventoryError(Exception):

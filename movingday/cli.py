@@ -10,7 +10,8 @@ from dataclasses import asdict
 
 import pytest
 
-from movingday import calendar_copy, contacts, mail, runtime, validation
+from movingday import calendar_copy, contacts, drive_copy, mail, runtime, validation
+from movingday.drive_copy import EXPORTS, FOLDER, FORM, GOOGLE
 from movingday.config import UntrustedFile, load_config
 from movingday.ledger import Ledger
 from movingday.mapping import MappingError, load_mapping
@@ -39,12 +40,27 @@ def _parser():
             s.add_argument("--mail", action="store_true")
             s.add_argument("--calendar", action="store_true")
             s.add_argument("--contacts", action="store_true")
+            s.add_argument("--drive", action="store_true")
             s.add_argument("--allow-existing", nargs="+", default=[], metavar="KEY")
     return p
 
 
-def _scan_user(apis, u, source_only):
-    """Read-only: profile, calendar list and contact counts. Returns the entry and the group calendars this user owns."""
+def _scan_drive(drive, user, sources) -> dict:
+    """Read-only Drive counts; files opened but owned outside the mapping are counted, not named."""
+    items = drive.list_owned(user)
+    ids, root = {i["id"] for i in items}, drive.root_id(user)
+    files = [i for i in items if i["mimeType"] != FOLDER]
+    other = [i["mimeType"] for i in files if i["mimeType"].startswith(GOOGLE) and i["mimeType"] not in EXPORTS]
+    parents = [(i.get("parents") or [None])[0] for i in items]
+    return {"drive_files": len(files), "drive_folders": len(items) - len(files),
+            "drive_bytes": sum(int(i.get("size") or 0) for i in files),
+            "drive_unsupported": sum(m != FORM for m in other), "drive_forms": other.count(FORM),
+            "drive_shared_from_outside": sum(o.lower() not in sources for o in drive.list_shared_owners(user)),
+            "drive_in_others_folders": sum(p is not None and p != root and p not in ids for p in parents)}
+
+
+def _scan_user(apis, u, source_only, sources):
+    """Read-only: profile, calendar list, contact and Drive counts. Returns the entry and the group calendars this user owns."""
     # classification must stay in step with calendar_copy.select_calendars
     e = {"user": u.key, "src_messages": apis.src_gmail.profile(u.source)["messagesTotal"]}
     own = delegated = 0
@@ -61,6 +77,7 @@ def _scan_user(apis, u, source_only):
     e.update(own_calendars=own, delegated_calendars=delegated,
              contacts=len(apis.src_people.list_contacts(u.source)),
              other_contacts=apis.src_people.count_other_contacts(u.source))
+    e.update(_scan_drive(apis.src_drive, u.source, sources))
     if not source_only:
         e["dst_existing"] = apis.dst_gmail.profile(u.destination)["messagesTotal"]
     return e, groups
@@ -68,10 +85,10 @@ def _scan_user(apis, u, source_only):
 
 def _check(config, users, source_only=False):
     apis = runtime.get_apis(config, source_only=source_only)
-    out, owned = [], {}
+    out, owned, sources = [], {}, {u.source.lower() for u in users}  # check always scans every user
     for u in users:
         try:
-            e, owned[u.key] = _scan_user(apis, u, source_only)
+            e, owned[u.key] = _scan_user(apis, u, source_only, sources)
             e["ok"] = True
         except Exception as exc:
             e = {"user": u.key, "ok": False, "reason": reason_for(exc)}
@@ -86,12 +103,14 @@ def _check(config, users, source_only=False):
                "accounts_with_delegated": sum(e["delegated_calendars"] > 0 for e in good),
                "accounts_with_team_calendars": sum(e["team_calendars"] > 0 for e in good),
                "total_contacts": sum(e["contacts"] for e in good),
+               "total_drive_bytes": sum(e["drive_bytes"] for e in good),
+               "largest_drive_bytes": max((e["drive_bytes"] for e in good), default=0),
                "failed": len(out) - len(good)}
     emit({"command": "check", "ok": not summary["failed"], "users": out, "summary": summary})
     return 1 if summary["failed"] else 0
 
 
-def _copy_user(config, u, do_mail, do_cal, do_contacts, mapping):
+def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping):
     try:
         ledger = Ledger(config.ledger_path)
         try:
@@ -109,7 +128,12 @@ def _copy_user(config, u, do_mail, do_cal, do_contacts, mapping):
                     apis.src_people, apis.dst_people, ledger, u.key, u.source, u.destination))
                 c["contacts_found"] = c.pop("found")  # mail already uses "found"
                 e.update(c)
-            # unsupported event types are retried every run; they are not failures (R5)
+            if do_drive:  # prefixed: calendars already use outside_shares
+                e.update({f"drive_{k}": v for k, v in asdict(drive_copy.copy_drive(
+                    apis.src_drive, apis.dst_drive, ledger, mapping, u.key, u.source, u.destination,
+                    config.dest_domain)).items()})
+            # unsupported event types are retried every run; they are not failures (R5). Unsupported Drive
+            # types, forms and files kept as Office files are never in the failed state.
             e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"}
             return e
         finally:
@@ -140,11 +164,12 @@ def _copy(config, mapping, a):
         if refused:
             emit({"command": "copy", "ok": False, "reason": "destination_not_empty", "users": refused})
             return 2
-        both = not (a.mail or a.calendar or a.contacts)
+        both = not (a.mail or a.calendar or a.contacts or a.drive)
         t0 = time.monotonic()
         with ThreadPoolExecutor(max_workers=config.parallel_users) as pool:
             results = list(pool.map(
-                lambda u: _copy_user(config, u, a.mail or both, a.calendar or both, a.contacts or both, mapping), users))
+                lambda u: _copy_user(config, u, a.mail or both, a.calendar or both, a.contacts or both,
+                                     a.drive or both, mapping), users))
         bad = any(not r["ok"] for r in results)
         emit({"command": "copy", "ok": not bad, "batch": a.batch, "users": results,
               "seconds": round(time.monotonic() - t0)})

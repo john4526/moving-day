@@ -9,7 +9,11 @@ ALLOWED_KEYS = frozenset(
     "events_failed acl_copied outside_shares no_date_header threads_src threads_dst "
     "users own_calendars delegated_calendars team_calendars summary total_messages largest_mailbox "
     "accounts_with_delegated accounts_with_team_calendars contacts other_contacts total_contacts contacts_found "
-    "contacts_copied contacts_updated contacts_failed labels_created removed_on_source passed failed_checks checks name failures report seconds".split()
+    "contacts_copied contacts_updated contacts_failed labels_created removed_on_source passed failed_checks checks name failures report seconds "
+    "drive_files drive_folders drive_bytes drive_unsupported drive_forms drive_shared_from_outside "
+    "drive_in_others_folders total_drive_bytes largest_drive_bytes drive_files_copied drive_files_updated "
+    "drive_files_moved drive_files_trashed drive_files_failed drive_kept_as_office drive_unplaced "
+    "drive_shares_added drive_shares_removed drive_shares_failed drive_outside_shares".split()
 )
 _SAFE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 

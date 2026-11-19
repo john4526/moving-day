@@ -3,7 +3,9 @@ from fakes import make_apis
 
 from movingday.calendar_copy import copy_calendars
 from movingday.contacts import copy_contacts
-from movingday.compare import InventoryError, compare_calendar, compare_contacts, compare_inventory, compare_mail, load_inventory
+from movingday.compare import (InventoryError, compare_calendar, compare_contacts, compare_drive, compare_inventory,
+                               compare_mail, load_inventory)
+from movingday.drive_copy import FORM, copy_drive
 from movingday.ledger import Ledger
 from movingday.mail import copy_mail
 from movingday.mapping import Mapping, User
@@ -371,3 +373,92 @@ def test_compare_contacts_only_reads(con):
     a, led = con
     cmp_con(a, led)
     assert {c[0] for c in a.src_people.calls + a.dst_people.calls} <= {"list_contacts", "list_groups"}
+
+
+PDF, DOC = "application/pdf", "application/vnd.google-apps.document"
+
+
+def copy_drv(a, led):
+    return copy_drive(a.src_drive, a.dst_drive, led, MAP, U, S, D, "y.org")
+
+
+def cmp_drv(a, led):
+    return compare_drive(a.src_drive, a.dst_drive, led, MAP, U, S, D, "y.org")
+
+
+@pytest.fixture
+def drv(env):
+    a, led = env
+    top = a.src_drive.add_folder(S, name="top")
+    a.src_drive.add_file(S, PDF, top, b"one")
+    a.src_drive.add_file(S, PDF, content=b"two")
+    a.src_drive.add_file(S, DOC, top, b"doc")
+    a.src_drive.add_file(S, FORM)  # unsupported: neither counted nor expected
+    return a, led
+
+
+def test_compare_drive_clean(drv):
+    a, led = drv
+    copy_drv(a, led)
+    r = cmp_drv(a, led)
+    assert (r.files_src, r.files_dst, r.files_missing, r.folders_src, r.folders_dst) == (3, 3, 0, 1, 1)
+    assert (r.checksum_mismatches, r.acl_missing, r.acl_extra, r.out_of_step, r.folder_not_copied) == (0,) * 5
+    assert {c[0] for c in a.src_drive.calls} <= {"root_id", "list_owned", "list_permissions", "download", "export"}
+
+
+def test_compare_drive_missing_and_checksum(drv):
+    a, led = drv
+    r = cmp_drv(a, led)
+    assert (r.files_missing, r.files_dst, r.out_of_step) == (3, 0, 5)  # nothing copied: every owned item has no row
+    copy_drv(a, led)
+    rows = led.drive_rows(U)
+    pdfs = [sid for sid, row in rows.items() if row["md5"]]
+    a.dst_drive.files[rows[pdfs[0]]["dst_id"]]["md5Checksum"] = "bad"
+    a.dst_drive.files[rows[pdfs[1]]["dst_id"]]["trashed"] = True
+    r = cmp_drv(a, led)
+    assert (r.files_dst, r.files_missing, r.checksum_mismatches) == (2, 1, 1)
+
+
+def test_compare_drive_acl_missing_and_extra(drv):
+    a, led = drv
+    sid = next(i for i, f in a.src_drive.files.items() if f["mimeType"] == PDF)
+    a.src_drive.share(S, sid, {"role": "writer", "type": "user", "emailAddress": "pal@x.org"})
+    a.src_drive.share(S, sid, {"role": "reader", "type": "anyone", "allowFileDiscovery": False})
+    copy_drv(a, led)
+    did = led.drive_rows(U)[sid]["dst_id"]
+    perms = a.dst_drive.files[did]["perms"]
+    perms.pop(next(k for k, p in perms.items() if p["type"] == "anyone"))
+    a.dst_drive.share(D, did, {"role": "reader", "type": "user", "emailAddress": "stranger@else.com"})
+    a.dst_drive.share(D, did, {"role": "owner", "type": "user", "emailAddress": D})  # the owner is not extra
+    r = cmp_drv(a, led)
+    assert (r.acl_missing, r.acl_extra, r.out_of_step) == (1, 1, 0)
+
+
+def test_compare_drive_out_of_step_after_source_edit(drv):
+    a, led = drv
+    copy_drv(a, led)
+    files = [i for i, f in a.src_drive.files.items() if f["mimeType"] == PDF]
+    a.src_drive.edit(files[0], content=b"changed")                     # version
+    a.src_drive.edit(files[1], parent=next(i for i, f in a.src_drive.files.items()
+                                           if f["mimeType"].endswith("folder")))  # parent (and version)
+    new = a.src_drive.add_file(S, PDF, content=b"new")                 # no row
+    a.src_drive.share(S, new, {"role": "reader", "type": "anyone"})
+    doc = next(i for i, f in a.src_drive.files.items() if f["mimeType"] == DOC)
+    a.src_drive.share(S, doc, {"role": "reader", "type": "anyone"})    # sharing fingerprint
+    r = cmp_drv(a, led)
+    assert r.out_of_step == 4
+    copy_drv(a, led)
+    assert cmp_drv(a, led).out_of_step == 0
+    a.src_drive.files[doc]["trashed"] = True                           # done row whose item is gone
+    assert cmp_drv(a, led).out_of_step == 1
+    copy_drv(a, led)  # the copy is trashed and the row closed
+    assert cmp_drv(a, led).out_of_step == 0
+
+
+def test_compare_drive_counts_files_whose_folder_is_not_copied(drv):
+    a, led = drv
+    theirs = a.src_drive.add_folder("pal@x.org", name="theirs")
+    a.src_drive.add_file(S, PDF, theirs, b"in theirs")
+    copy_drv(a, led)
+    r = cmp_drv(a, led)
+    assert (r.folder_not_copied, r.out_of_step, r.files_missing) == (1, 0, 0)

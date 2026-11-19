@@ -7,6 +7,12 @@ from fakes import make_apis
 
 from movingday.api import ApiError
 from movingday import cli, mail, runtime
+from movingday.drive_copy import FORM
+
+REAL_GET_APIS = runtime.get_apis
+PDF = "application/pdf"
+DRIVE0 = {"drive_files": 0, "drive_folders": 0, "drive_bytes": 0, "drive_unsupported": 0, "drive_forms": 0,
+          "drive_shared_from_outside": 0, "drive_in_others_folders": 0}
 
 RAW = b"Subject: s\r\nMessage-ID: <a@x>\r\nDate: Mon, 1 Jan 2026 00:00:00 +0000\r\n\r\nb\r\n"
 
@@ -47,7 +53,7 @@ def test_check_reports_sizes_per_user_key(env, capsys):
     assert code == 0 and out[0]["ok"] is True
     assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "own_calendars": 0, "delegated_calendars": 0,
                                   "team_calendars": 0, "contacts": 0, "other_contacts": 0, "dst_existing": 0,
-                                  "ok": True}
+                                  **DRIVE0, "ok": True}
     assert [u["user"] for u in out[0]["users"]] == ["u001", "u002", "u003"]
 
 
@@ -76,7 +82,7 @@ def test_check_classifies_calendars_and_summarises(env, capsys):
     assert (u["u003"]["own_calendars"], u["u003"]["delegated_calendars"], u["u003"]["team_calendars"]) == (0, 0, 0)
     assert out[0]["summary"] == {"users": 3, "total_messages": 6, "largest_mailbox": 2,
                                  "accounts_with_delegated": 1, "accounts_with_team_calendars": 2, "total_contacts": 0,
-                                 "failed": 0}
+                                 "total_drive_bytes": 0, "largest_drive_bytes": 0, "failed": 0}
     assert "@" not in cap.out
 
 
@@ -86,7 +92,7 @@ def test_check_source_only_never_touches_destination(env, capsys):
     assert code == 0 and apis.get_apis_calls == [True]
     assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "own_calendars": 0,
                                   "delegated_calendars": 0, "team_calendars": 0, "contacts": 0,
-                                  "other_contacts": 0, "ok": True}
+                                  "other_contacts": 0, **DRIVE0, "ok": True}
     assert apis.dst_gmail.calls == [] and apis.dst_cal.calls == [] and apis.dst_people.calls == []
     assert {c[0] for c in apis.src_gmail.calls + apis.src_cal.calls} == {"profile", "list_calendars"}
     assert {c[0] for c in apis.src_people.calls} == {"list_contacts", "count_other_contacts"}
@@ -338,3 +344,72 @@ def test_untrusted_config_or_mapping_exits_2(env, capsys, name):
     os.chmod(tmp / name, 0o666)
     code, out, _ = run(capsys, "status", "--config", cfg)
     assert code == 2 and out == [{"command": "status", "ok": False, "reason": "untrusted_file"}]
+
+
+def test_copy_drive_flag_only_drive(env, capsys):
+    apis, cfg, _ = env
+    apis.src_drive.add_file("a@old.org", PDF, content=b"x")
+    apis.src_drive.add_file("a@old.org", FORM)
+    _contact(apis)
+    code, out, cap = run(capsys, "copy", "--batch", "b1", "--drive", "--config", cfg)
+    u = out[0]["users"][0]
+    assert code == 0 and u["ok"] is True and u["drive_files_copied"] == 1 and u["drive_forms"] == 1
+    assert u["drive_files_updated"] == 0 and "copied" not in u and "contacts_copied" not in u
+    assert apis.src_cal.calls == [] and apis.src_people.calls == []
+    assert not apis.dst_gmail.messages.get("a@new.org") and "@" not in cap.out
+
+
+def test_copy_no_flags_runs_all_four_parts(env, capsys):
+    apis, cfg, _ = env
+    apis.src_drive.add_file("a@old.org", PDF, content=b"x")
+    _contact(apis)
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    u = out[0]["users"][0]
+    assert code == 0 and u["copied"] == 2 and "calendars" in u and u["contacts_copied"] == 1
+    assert u["drive_files_copied"] == 1
+
+
+def test_failed_drive_file_makes_copy_not_ok(env, capsys):
+    apis, cfg, _ = env
+    apis.src_drive.add_file("a@old.org", PDF, content=b"x")
+    apis.dst_drive.fail_next("upload", ApiError("http_500", False))
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--drive", "--config", cfg)
+    assert code == 1 and out[0]["users"][0]["ok"] is False and out[0]["users"][0]["drive_files_failed"] == 1
+
+
+def test_check_reports_drive_counts_and_summary(env, capsys):
+    apis, cfg, _ = env
+    d = apis.src_drive
+    top = d.add_folder("a@old.org")
+    d.add_file("a@old.org", PDF, top, b"12345")
+    d.add_file("a@old.org", PDF, content=b"123")
+    d.add_file("a@old.org", FORM)
+    d.add_file("a@old.org", "application/vnd.google-apps.drawing")
+    theirs = d.add_folder("b@old.org")
+    d.add_file("a@old.org", PDF, theirs, b"1")                           # in someone else's folder
+    for owner in ("b@old.org", "boss@parent.org", "boss@parent.org"):    # opened by a, owned by others
+        d.share(owner, d.add_file(owner, PDF), {"role": "reader", "type": "user", "emailAddress": "a@old.org"})
+    code, out, cap = run(capsys, "check", "--config", cfg)
+    u = {x["user"]: x for x in out[0]["users"]}
+    assert code == 0
+    assert {k: v for k, v in u["u001"].items() if k.startswith("drive_")} == {
+        "drive_files": 5, "drive_folders": 1, "drive_bytes": 9, "drive_unsupported": 1, "drive_forms": 1,
+        "drive_shared_from_outside": 2, "drive_in_others_folders": 1}
+    assert (u["u002"]["drive_folders"], u["u002"]["drive_files"], u["u002"]["drive_bytes"]) == (1, 1, 0)
+    assert (out[0]["summary"]["total_drive_bytes"], out[0]["summary"]["largest_drive_bytes"]) == (9, 9)
+    assert "@" not in cap.out
+
+
+def test_check_source_only_never_builds_dst_drive(env, capsys, monkeypatch):
+    apis, cfg, tmp = env
+    apis.src_drive.add_file("a@old.org", PDF, content=b"x")
+    code, out, _ = run(capsys, "check", "--source-only", "--config", cfg)
+    assert code == 0 and apis.get_apis_calls == [True] and apis.dst_drive.calls == []
+    assert out[0]["users"][0]["drive_files"] == 1
+    assert {c[0] for c in apis.src_drive.calls} <= {"root_id", "list_owned", "list_shared_owners"}
+    built = []
+    for name in ("Gmail", "Calendar", "People", "Drive", "Directory"):
+        monkeypatch.setattr(runtime, name, lambda key, *a, _n=name: built.append((_n, key)))
+    from movingday.config import load_config
+    got = REAL_GET_APIS(load_config(cfg), source_only=True)
+    assert got.dst_drive is None and ("Drive", "s.json") in built and all(k == "s.json" for _, k in built)
