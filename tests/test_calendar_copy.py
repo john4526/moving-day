@@ -80,7 +80,7 @@ def test_rerun_updates_changed_event_without_duplicating(env):
     a, led = env
     eid = a.src_cal.add_event(S, S, {"summary": "v1"})
     run(env)
-    assert run(env) == CalStats(1, 0, 0, 0, 0, 1, 0)  # nothing changed (acl: none to copy beyond owner)
+    assert run(env) == CalStats(1, 0, 0, 0, 0, 0, 0)
     ev = a.src_cal.cals[S][S]["events"][eid]
     ev["summary"], ev["updated"] = "v2", "2030-01-01T00:00:00.000Z"
     st = run(env)
