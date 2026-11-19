@@ -1,10 +1,23 @@
 import threading
 
+import pytest
+
 from wsmigrate.ledger import Ledger
+
+_open = []
 
 
 def make(tmp_path):
-    return Ledger(str(tmp_path / "ledger.db"))
+    led = Ledger(str(tmp_path / "ledger.db"))
+    _open.append(led)
+    return led
+
+
+@pytest.fixture(autouse=True)
+def _close_ledgers():
+    yield
+    while _open:
+        _open.pop().close()
 
 
 def test_pending_then_done_roundtrip(tmp_path):
@@ -61,6 +74,7 @@ def test_reopen_keeps_state(tmp_path):
     led.set_cal("u001", "c1", "dc1")
     led.set_meta("u001", "preexisting", "5")
     led.close()
+    _open.remove(led)
     led = make(tmp_path)
     assert led.done_ids("u001") == {"m1"}
     assert led.cal_map("u001") == {"c1": "dc1"}
@@ -110,11 +124,28 @@ def test_meta_roundtrip(tmp_path):
 
 def test_concurrent_writers_share_file(tmp_path):
     def work(n):
-        led = make(tmp_path)
+        led = Ledger(str(tmp_path / "ledger.db"))
         for i in range(25):
             led.mark_pending("u001", f"m{n}-{i}", "t", "h")
             led.mark_done("u001", f"m{n}-{i}", "d", "dt")
+        led.close()
     ts = [threading.Thread(target=work, args=(n,)) for n in range(4)]
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert len(make(tmp_path).done_ids("u001")) == 100
+
+
+def test_mark_failed_does_not_downgrade_done(tmp_path):
+    led = make(tmp_path)
+    led.mark_pending("u001", "m1", "t1", "h1")
+    led.mark_done("u001", "m1", "d1", "dt1")
+    led.mark_failed("u001", "m1", "http_500")
+    assert "m1" in led.done_ids("u001")
+    assert led.failures("u001") == {}
+
+
+def test_mark_done_without_pending_row(tmp_path):
+    led = make(tmp_path)
+    led.mark_done("u001", "m1", "d1", "dt1")
+    assert led.done_ids("u001") == {"m1"}
+    assert led.counts("u001") == {"done": 1, "failed": 0, "pending": 0}

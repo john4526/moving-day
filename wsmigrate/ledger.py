@@ -66,7 +66,8 @@ class Ledger:
     def mark_failed(self, user_key, src_id, reason):
         self._w(
             "INSERT INTO messages(user_key,src_id,state,reason) VALUES(?,?,'failed',?) "
-            "ON CONFLICT(user_key,src_id) DO UPDATE SET state='failed', reason=excluded.reason",
+            "ON CONFLICT(user_key,src_id) DO UPDATE SET state='failed', reason=excluded.reason "
+            "WHERE messages.state!='done'",
             (user_key, src_id, reason))
 
     def pending(self, user_key):
