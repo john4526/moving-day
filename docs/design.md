@@ -314,3 +314,21 @@ Still open, settled by the rehearsal rather than by a decision now:
 - Total mail volume and real copy speed, which set how long the mail outage
   lasts and whether the fallback above is needed.
 - The Google API behaviours marked "confirm in pilot" in this document.
+
+## Changes made during the build (18 Nov 2026)
+
+These were made while building the tool. Approved sections above are unchanged.
+
+- The HTML report shows, for every check and every user, the condition, the
+  expected result and the actual result, line by line (user requirement).
+- Calendar validation also counts events missing on the destination, not
+  only totals.
+- Label check: a label with fewer messages on the destination is always a
+  mismatch. The welcome-mail allowance only covers extra messages.
+- The inventory file must have exactly the columns `type,address,parent`.
+  Anything else stops `verify` with a reason.
+- Failed calendar shares are counted (`acl_failed`) and caught by the
+  sharing check.
+- Unsupported calendar entry types (out-of-office, focus time, working
+  location, birthdays) are reported, not treated as failures.
+- `--help` is disabled; every output is one JSON line.

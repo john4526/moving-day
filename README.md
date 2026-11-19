@@ -4,17 +4,25 @@ Command-line tool to copy mail and calendars between two Google Workspace
 accounts, operated by an AI agent with human approval of irreversible steps,
 and validated by a test suite with HTML reports.
 
-**Status:** design draft, not approved. Nothing is built yet.
+**Status:** built; rehearsal not yet done.
 
-See [docs/design.md](docs/design.md) for intent, scope, privacy rules,
-commands, test plan and open questions.
+See [docs/design.md](docs/design.md) for intent, scope, privacy rules and the
+test plan. To set the tool up and run it, read
+[docs/operator-setup.md](docs/operator-setup.md). Before the real copy,
+work through [docs/rehearsal-checklist.md](docs/rehearsal-checklist.md).
 
-## Planned commands
+## Usage
 
-- `check` — validate the mapping file and access; no data moves
-- `copy --batch NAME [--mail] [--calendar]` — copy; safe to re-run
-- `status [--batch NAME]` — per-user counts
-- `verify --batch NAME` — run validation tests, write the HTML report
+Every command needs `--config PATH` and prints one line of JSON. `--help` is
+disabled. Exit codes: 0 success, 1 finished with failures, 2 refused to run.
+
+- `wsmigrate check --config PATH` : validates the mapping and access for all
+  users; no data moves
+- `wsmigrate copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...] --config PATH` :
+  copies (both mail and calendar if neither flag is given); safe to re-run
+- `wsmigrate status [--batch NAME] --config PATH` : per-user counts
+- `wsmigrate verify --batch NAME [--expect-changes] --config PATH` : runs the
+  validation checks and writes the HTML report
 
 ## What must never be committed
 
