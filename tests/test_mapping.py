@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from wsmigrate.mapping import MappingError, load_mapping
@@ -85,3 +87,11 @@ def test_bad_batch(tmp_path, batch):
 
 def test_batch_with_dot_dash_underscore_accepted(tmp_path):
     assert load_mapping(write(tmp_path, f"u001,a@x.org,a@y.org,Wave_1.a-{'x' * 31}\n")).users[0].batch
+
+
+def test_mapping_writable_by_group_refused(tmp_path):
+    p = write(tmp_path, "u001,a@x.org,a@y.org,b1\n")
+    os.chmod(p, 0o664)
+    with pytest.raises(Exception) as e:
+        load_mapping(p)
+    assert e.value.reason == "untrusted_file"

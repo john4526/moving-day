@@ -1,5 +1,6 @@
 import fcntl
 import json
+import os
 
 import pytest
 from fakes import make_apis
@@ -202,3 +203,11 @@ def test_output_never_contains_addresses(env, capsys):
     for argv in (["check"], ["copy", "--batch", "b1"], ["status"]):
         code, out, cap = run(capsys, *argv, "--config", cfg)
         assert "@" not in cap.out and cap.err == ""
+
+
+@pytest.mark.parametrize("name", ["c.toml", "m.csv"])
+def test_untrusted_config_or_mapping_exits_2(env, capsys, name):
+    _, cfg, tmp = env
+    os.chmod(tmp / name, 0o666)
+    code, out, _ = run(capsys, "status", "--config", cfg)
+    assert code == 2 and out == [{"command": "status", "ok": False, "reason": "untrusted_file"}]

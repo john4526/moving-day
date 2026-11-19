@@ -2,6 +2,8 @@ import csv
 import re
 from dataclasses import dataclass
 
+from wsmigrate.config import require_trusted
+
 COLUMNS = ("key", "source", "destination", "batch")
 
 
@@ -43,6 +45,7 @@ def _bad_address(a: str) -> bool:
 
 def load_mapping(path: str) -> Mapping:
     with open(path, newline="", encoding="utf-8-sig") as f:
+        require_trusted(f)
         reader = csv.DictReader(f)
         header = [(h or "").strip() for h in reader.fieldnames or []]
         if any(c not in header for c in COLUMNS):

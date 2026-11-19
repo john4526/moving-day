@@ -11,7 +11,7 @@ from dataclasses import asdict
 import pytest
 
 from wsmigrate import calendar_copy, mail, runtime, validation
-from wsmigrate.config import load_config
+from wsmigrate.config import UntrustedFile, load_config
 from wsmigrate.ledger import Ledger
 from wsmigrate.mapping import MappingError, load_mapping
 from wsmigrate.safeout import emit, reason_for
@@ -182,11 +182,14 @@ def main(argv: list[str] | None = None) -> int:
         if not a.config:
             emit({"command": name, "ok": False, "reason": "no_config"})
             return 2
-        config = load_config(a.config)
         try:
+            config = load_config(a.config)
             mapping = load_mapping(config.mapping_file)
         except MappingError as e:
             emit({"command": name, "ok": False, "reason": e.reason, "row": e.row})
+            return 2
+        except UntrustedFile as e:
+            emit({"command": name, "ok": False, "reason": e.reason})
             return 2
         if name == "verify":
             if not mapping.batch(a.batch):
