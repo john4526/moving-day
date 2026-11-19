@@ -103,6 +103,35 @@ an item says "else", the fallback is named.
 - [ ] Contacts count on the destination equals the source after `copy`; the
   report's contact checks pass.
 
+## D3. Drive
+
+- [ ] `drive.file` on the destination is enough to read back sharing on the
+  files the tool created (`verify` sharing check). Else switch to `drive`,
+  record the decision, and change `movingday/runtime.py` to match.
+- [ ] Created and modified times are kept when set on upload (and modified
+  time on a metadata update).
+- [ ] The export-link fallback works for a Google file whose export is above
+  10 MB.
+- [ ] Export links honour Range requests (else a large export is held whole
+  in memory).
+- [ ] A refused conversion on upload is detectable (400, or 403 not for rate
+  limiting) and the unconverted retry works; the file counts as kept as an
+  Office file.
+- [ ] A rate-limit 403 during upload is retried, not taken as a refused
+  conversion.
+- [ ] A resumable upload's 308 `Range` header always shows the whole chunk
+  persisted (no short persists); the uploader assumes full chunks.
+- [ ] `update_content` on a converted Google file re-converts it in place
+  (same file, same address).
+- [ ] Measured speed in MB per second per user: ______
+- [ ] Behaviour at Google's 750 GB per user per day upload limit (the error
+  seen, and that a re-run the next day carries on).
+- [ ] Sharing to a non-Google address without a notification is refused, and
+  is counted as a failed share.
+- [ ] A copy moved to the destination trash is restorable.
+- [ ] What Drive does with another owner's copy inside a folder its owner
+  trashes (the tool moves its own copies out first).
+
 ## E. Directory
 
 - [ ] Aliases that belong to groups (not users): the tool only checks user

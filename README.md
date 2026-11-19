@@ -1,7 +1,7 @@
 # Moving Day
 
-Moving Day (`movingday`) is a command-line tool that copies mail, calendars and
-contacts from one Google Workspace account to another, so a domain can move between
+Moving Day (`movingday`) is a command-line tool that copies mail, calendars,
+contacts and Drive files from one Google Workspace account to another, so a domain can move between
 accounts without a per-user migration licence and without a third party
 handling stored mail.
 
@@ -9,7 +9,7 @@ It is built to be run by an AI agent, or by a person typing the same four
 commands. People approve every irreversible step, and a per-user validation
 report is the evidence for sign-off.
 
-**Status:** built, with 206 logic tests passing against a simulated Google
+**Status:** built, with 269 logic tests passing against a simulated Google
 API. It has not yet been run against real Google Workspace accounts. Work
 through [docs/rehearsal-checklist.md](docs/rehearsal-checklist.md) before any
 real copy.
@@ -22,21 +22,27 @@ real copy.
   without re-sending invitations.
 - Copies each person's saved contacts with their labels. Contacts are never
   deleted on either side.
+- Copies the files and folders each person owns in My Drive, with their
+  folder structure and sharing (notifications off). Google Docs, Sheets and
+  Slides go through Office format; uploaded files arrive byte for byte
+  identical. Comments, suggestions and version history are not carried over.
 - Scans every account before any copy (`check --source-only`): message
-  counts, own, delegated and team calendars, and contacts, as counts only.
+  counts, own, delegated and team calendars, contacts and Drive sizes, as
+  counts only.
 - Is safe to re-run. A second run copies only what is missing and creates no
   duplicates. An interrupted run resumes where it stopped.
 - Reads the source account only. There is no delete command and no code path
   that changes the source.
 - Keeps mail content out of its output, logs and reports. The operator sees
-  user keys, counts and reason codes, never subjects, bodies, event titles
-  or contact details.
+  user keys, counts and reason codes, never subjects, bodies, event titles,
+  contact details, or file names and content.
 - Writes an HTML validation report showing, for every user and every check,
   the condition, the expected result and the actual result.
 
 ## What it does not do
 
-- Drive files and shared drives.
+- Shared drives (files in My Drive are copied). Google Forms and other
+  Google file types with no export are counted, not copied.
 - "Other contacts" (addresses Gmail saves automatically); the scan and the
   report count them for information.
 - Gmail settings: filters, signatures, forwarding and send-as.
@@ -58,6 +64,7 @@ flowchart LR
     sg["Gmail"]
     sc["Calendar"]
     sp["Contacts"]
+    sd["Drive"]
   end
 
   subgraph HOST["Operator machine"]
@@ -70,6 +77,7 @@ flowchart LR
     dg["Gmail"]
     dc["Calendar"]
     dp["Contacts"]
+    df["Drive"]
     dd["Directory"]
   end
 
@@ -93,7 +101,7 @@ flowchart LR
   party.
 - **Access:** two service accounts, one per Google account, each with the
   narrowest scopes that work. The source side is read-only. The destination
-  side can insert mail, create calendar items and contacts, and can read
+  side can insert mail, create calendar items, contacts and Drive files, and can read
   message headers for validation, but not message bodies.
 - **State:** a local SQLite ledger records what has been copied, which is
   what makes re-runs and resumes safe.
@@ -126,9 +134,11 @@ disabled. Exit codes: 0 success, 1 finished with failures, 2 refused to run.
 
 - `movingday check [--source-only] --config PATH` : validates the mapping and
   access for all users and scans each account (messages, calendars,
-  contacts); no data moves. `--source-only` needs only the source key.
-- `movingday copy --batch NAME [--mail] [--calendar] [--contacts] [--allow-existing KEY ...] --config PATH` :
-  copies (mail, calendars and contacts if no part flag is given); safe to re-run
+  contacts, Drive); no data moves. `--source-only` needs only the source key.
+- `movingday copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...] --config PATH` :
+  copies (mail, calendars, contacts and Drive if no part flag is given); safe
+  to re-run. Drive is pre-copied in the week before cutover and topped up in
+  the freeze
 - `movingday status [--batch NAME] --config PATH` : per-user counts
 - `movingday verify --batch NAME [--expect-changes] --config PATH` : runs the
   validation checks and writes the HTML report

@@ -48,8 +48,8 @@ is never opened, and the destination does not need to exist yet.
   ```
 
 It prints one JSON line: per user the message count, the number of own,
-delegated and team calendars, and the number of contacts and other contacts,
-plus a `summary`. It writes nothing and copies
+delegated and team calendars, the number of contacts and other contacts, and
+Drive counts (below), plus a `summary`. It writes nothing and copies
 nothing. Run it again later without `--source-only` to also see what is
 already in each destination mailbox.
 
@@ -58,6 +58,10 @@ already in each destination mailbox.
 | Largest mailboxes (`largest_mailbox`, each `src_messages`) | Who must be in the mock, and how long the freeze must be. |
 | `total_messages` and the speed seen in the rehearsal | Which mail copy method to use. |
 | `contacts`, `other_contacts`, `total_contacts` | How big the contacts copy is. Other contacts (addresses Gmail saved for autocomplete) are counted for information and not copied. |
+| `drive_files`, `drive_folders`, `drive_bytes`, `total_drive_bytes`, `largest_drive_bytes` | How long the Drive pre-copy takes, and whether anyone is near Google's 750 GB per user per day upload limit. `drive_files` counts every owned file, including the types below. |
+| `drive_unsupported`, `drive_forms` | Files Google cannot export (Forms counted separately). They are not copied; tell their owners. |
+| `drive_shared_from_outside` | Files a person can open that someone outside the mapping file owns. Not copied; for information. |
+| `drive_in_others_folders` | Files a person owns inside someone else's folder. Copy the folder owners' batch first, or re-run once at the end. |
 | `delegated_calendars`, `team_calendars` (and the `accounts_with_` counts) | Whom to test and brief. People with team calendars need a batch order, because the first one copied takes the calendar. |
 | Near-empty accounts | Put them in an early batch. |
 
@@ -71,8 +75,8 @@ Do these steps once for each account, signed in as a super administrator of
 that account. For the source this is the parent organisation's administrator.
 
 1. In the Google Cloud console, create a project (or pick an existing one).
-2. In that project, enable these APIs: Gmail API, Google Calendar API and
-   People API. For the destination only, also enable Admin SDK API.
+2. In that project, enable these APIs: Gmail API, Google Calendar API,
+   People API and Google Drive API. For the destination only, also enable Admin SDK API.
 3. Create a service account. Create a JSON key for it and download the file.
    Treat the key like a password.
 4. Copy the service account's numeric Client ID.
@@ -84,19 +88,25 @@ that account. For the source this is the parent organisation's administrator.
 **Source account scopes** (read only):
 
 ```
-https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/calendar.acls.readonly,https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/contacts.other.readonly
+https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/calendar.acls.readonly,https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/contacts.other.readonly,https://www.googleapis.com/auth/drive.readonly
 ```
 
 **Destination account scopes:**
 
 ```
-https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/contacts
+https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/contacts,https://www.googleapis.com/auth/drive.file
 ```
 
 Notes:
 
 - The source grant cannot be limited to our users. Technically it can read
-  every mailbox in the parent organisation. Revoke it as soon as the
+  every mailbox, and every Drive file, in the parent organisation.
+- For Drive, the source grant adds only `drive.readonly`. If the source
+  entry already exists, add that one scope to it.
+- The destination uses `drive.file`: the tool sees only the files it created.
+  If the rehearsal shows that is not enough, the fallback is the full
+  `https://www.googleapis.com/auth/drive` scope on the destination, recorded
+  as a decision, with `movingday/runtime.py` changed to match. Revoke it as soon as the
   migration is signed off (see Teardown).
 - If Google refuses `calendar.acls.readonly` on the source, stop. The
   fallback is the full `https://www.googleapis.com/auth/calendar` scope on
@@ -310,10 +320,10 @@ sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/mo
 
 | Command | What it does |
 |---|---|
-| `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts, contact and other-contact counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
-| `copy --batch NAME [--mail] [--calendar] [--contacts] [--allow-existing KEY ...]` | Copies. With none of `--mail`, `--calendar` and `--contacts` it copies all three. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
+| `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts, contact and other-contact counts, Drive counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
+| `copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...]` | Copies. With none of `--mail`, `--calendar`, `--contacts` and `--drive` it copies all four. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
 | `status [--batch NAME]` | Prints copied, failed and pending counts per user. |
-| `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account. |
+| `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account (and Drive files still change). |
 
 `--help` is switched off. Every command prints one line of JSON and nothing
 else.
@@ -361,6 +371,29 @@ the source is updated on the destination; a contact removed on the source is
 counted in `removed_on_source` and never deleted. A failed contact makes that
 user's `ok` false; run `copy` again to retry. Photos are not copied.
 
+Drive: with `--drive` (or no part flag) every file and folder each user owns
+in My Drive is copied, with its sharing (notifications off). Shared drives are
+not copied. Output keys start with `drive_`: `drive_folders`,
+`drive_files_copied`, `drive_files_updated` (files updated: content or name,
+description, starred), `drive_files_moved`, `drive_files_trashed` (copies
+moved to the destination trash because the source file was deleted or given
+away; restorable for 30 days), `drive_files_failed`, `drive_kept_as_office`,
+`drive_unsupported`, `drive_forms`, `drive_unplaced`, `drive_shares_added`,
+`drive_shares_removed`, `drive_shares_failed` and `drive_outside_shares`. A
+failed file makes that user's `ok` false; run `copy` again to retry.
+Unsupported types, Forms and files kept as Office files never do.
+
+Drive schedule:
+
+- **Week before cutover: pre-copy Drive.** Run `copy --batch NAME --drive`
+  for each batch while people still work, as often as useful. The source is
+  never changed, so this is safe.
+- **During the freeze: Drive top-up.** Run `copy --batch NAME --drive` once
+  more (or as part of the full `copy`). It copies only what changed since the
+  last run, then `verify`. The "Drive in step" check catches anything changed
+  after the top-up (for example by parent-organisation staff, who are not
+  locked out).
+
 Calendars: each user's primary calendar is copied, and each team (group)
 calendar they own or manage is copied once, by the first user who reaches
 it. Other people's calendars that a user can manage (for example an
@@ -371,8 +404,11 @@ These counts are not in the JSON output but are shown in the report's
 "carried over notes" row for each user, for information: split threads,
 messages with no Date header (copied, but showing a different date),
 calendar entries of unsupported types not copied, outside shares, shares
-that failed to copy, shared calendars skipped, other contacts (not copied)
-and contacts removed on the source. A failed share is also
+that failed to copy, shared calendars skipped, other contacts (not copied),
+contacts removed on the source, and for Drive: unsupported files and Forms not
+copied, files kept as Office files, unplaced files, outside and failed shares,
+copies moved to the destination trash, and the fixed note that comments,
+suggestions and version history are not carried over. A failed share is also
 caught by the `verify` sharing check, which compares the source's sharing
 rules with the destination's.
 

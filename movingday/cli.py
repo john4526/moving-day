@@ -60,7 +60,8 @@ def _scan_drive(drive, user, sources) -> dict:
 
 
 def _scan_user(apis, u, source_only, sources):
-    """Read-only: profile, calendar list, contact and Drive counts. Returns the entry and the group calendars this user owns."""
+    """Read-only: profile, calendar list, contact and Drive counts. Returns the entry and the group calendars
+    this user owns."""
     # classification must stay in step with calendar_copy.select_calendars
     e = {"user": u.key, "src_messages": apis.src_gmail.profile(u.source)["messagesTotal"]}
     own = delegated = 0
