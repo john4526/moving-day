@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wsmigrate"
+name = "movingday"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,10 +14,10 @@ dependencies = [
 ]
 
 [project.scripts]
-wsmigrate = "wsmigrate.cli:main"
+movingday = "movingday.cli:main"
 
 [tool.setuptools]
-packages = ["wsmigrate", "wsmigrate.validation"]
+packages = ["movingday", "movingday.validation"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,12 +3,12 @@ import html
 
 import pytest
 
-from wsmigrate import runtime
-from wsmigrate.compare import compare_calendar, compare_mail
-from wsmigrate.config import load_config
-from wsmigrate.ledger import Ledger
-from wsmigrate.mapping import load_mapping
-from wsmigrate.safeout import reason_for
+from movingday import runtime
+from movingday.compare import compare_calendar, compare_mail
+from movingday.config import load_config
+from movingday.ledger import Ledger
+from movingday.mapping import load_mapping
+from movingday.safeout import reason_for
 
 
 def pytest_addoption(parser):
@@ -29,6 +29,10 @@ def pytest_generate_tests(metafunc):
     if "user" in metafunc.fixturenames:
         users = _users(metafunc.config)
         metafunc.parametrize("user", users, ids=[u.key for u in users])
+
+
+def pytest_html_report_title(report):
+    report.title = "Moving Day sign-off report"
 
 
 def pytest_html_results_summary(prefix, summary, postfix, session):

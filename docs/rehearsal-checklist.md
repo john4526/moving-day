@@ -11,7 +11,7 @@ an item says "else", the fallback is named.
   address of a trial account.
 - [ ] `calendar.acls.readonly` is accepted for reading sharing settings.
   Else fall back to the full `calendar` scope on the source, and record the
-  decision (and change `wsmigrate/runtime.py` to match).
+  decision (and change `movingday/runtime.py` to match).
 - [ ] The destination calendar id `primary` works for every call.
 
 ## B. Lockout and freeze

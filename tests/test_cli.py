@@ -5,8 +5,8 @@ import os
 import pytest
 from fakes import make_apis
 
-from wsmigrate.api import ApiError
-from wsmigrate import cli, mail, runtime
+from movingday.api import ApiError
+from movingday import cli, mail, runtime
 
 RAW = b"Subject: s\r\nMessage-ID: <a@x>\r\nDate: Mon, 1 Jan 2026 00:00:00 +0000\r\n\r\nb\r\n"
 
@@ -46,7 +46,7 @@ def test_check_reports_sizes_per_user_key(env, capsys):
 
 def test_check_profile_failure_continues(env, capsys):
     apis, cfg, _ = env
-    from wsmigrate.api import ApiError
+    from movingday.api import ApiError
     apis.src_gmail.fail_next("profile", ApiError("http_500", False))
     code, out, _ = run(capsys, "check", "--config", cfg)
     assert code == 1 and out[0]["ok"] is False
@@ -183,7 +183,7 @@ def test_top_level_error_emits_reason(env, capsys, monkeypatch):
 
 
 def test_no_config_and_bad_arguments(env, capsys, monkeypatch):
-    monkeypatch.delenv("WSMIGRATE_CONFIG", raising=False)
+    monkeypatch.delenv("MOVINGDAY_CONFIG", raising=False)
     code, out, _ = run(capsys, "check")
     assert code == 2 and out[0]["reason"] == "no_config"
     for argv in (["copy", "--bogus"], ["--help"], ["copy", "-h"]):
@@ -193,7 +193,7 @@ def test_no_config_and_bad_arguments(env, capsys, monkeypatch):
 
 def test_config_from_environment(env, capsys, monkeypatch):
     _, cfg, _ = env
-    monkeypatch.setenv("WSMIGRATE_CONFIG", cfg)
+    monkeypatch.setenv("MOVINGDAY_CONFIG", cfg)
     code, out, _ = run(capsys, "status")
     assert code == 0 and len(out[0]["users"]) == 3
 

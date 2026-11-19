@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from wsmigrate.api import Calendar, Directory, Gmail
-from wsmigrate.config import Config
+from movingday.api import Calendar, Directory, Gmail
+from movingday.config import Config
 
 _G = "https://www.googleapis.com/auth/"
 SRC_SCOPES = [_G + "gmail.readonly", _G + "calendar.readonly", _G + "calendar.acls.readonly"]

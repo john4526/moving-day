@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from wsmigrate.mapping import MappingError, load_mapping
+from movingday.mapping import MappingError, load_mapping
 
 HEADER = "key,source,destination,batch\n"
 

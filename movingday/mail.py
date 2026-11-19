@@ -3,7 +3,7 @@ import hashlib
 from dataclasses import dataclass
 from email.parser import BytesHeaderParser
 
-from wsmigrate.api import ApiError
+from movingday.api import ApiError
 
 SKIP_LABELS = {"SPAM", "TRASH", "DRAFT", "CHAT"}
 

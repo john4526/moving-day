@@ -1,4 +1,4 @@
-# Migration utility: design (draft for approval)
+# Moving Day: migration utility design (draft for approval)
 
 Date: 18 November 2026. Status: approved by Jonathon Kline on 18 November 2026. Nothing is built yet.
 
@@ -319,6 +319,7 @@ Still open, settled by the rehearsal rather than by a decision now:
 
 These were made while building the tool. Approved sections above are unchanged.
 
+- Renamed from wsmigrate to Moving Day (command `movingday`).
 - The HTML report shows, for every check and every user, the condition, the
   expected result and the actual result, line by line (user requirement).
 - Calendar validation also counts events missing on the destination, not

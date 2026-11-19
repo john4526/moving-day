@@ -3,8 +3,8 @@ import csv
 from collections import Counter
 from dataclasses import dataclass
 
-from wsmigrate.calendar_copy import select_calendars, translate_rules
-from wsmigrate.mail import SKIP_LABELS, _hash_header
+from movingday.calendar_copy import select_calendars, translate_rules
+from movingday.mail import SKIP_LABELS, _hash_header
 
 
 @dataclass

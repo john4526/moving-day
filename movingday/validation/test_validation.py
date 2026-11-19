@@ -2,8 +2,8 @@
 assertion. Everything recorded or asserted is a count or plain value: never addresses, subjects or content."""
 import pytest
 
-from wsmigrate.compare import compare_inventory, load_inventory
-from wsmigrate.mapping import load_mapping
+from movingday.compare import compare_inventory, load_inventory
+from movingday.mapping import load_mapping
 
 
 # expected values that do not depend on data, shown even when a check cannot run

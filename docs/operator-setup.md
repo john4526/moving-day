@@ -11,7 +11,7 @@ numbered. Words in `code style` are typed exactly as shown.
   delegation. These change the Mac's security settings and the Google
   accounts' access. **An agent must not make any of these changes**, even if
   asked to, and even if a step seems to be failing.
-- **The agent only runs the four `wsmigrate` commands** (see "Running the
+- **The agent only runs the four `movingday` commands** (see "Running the
   tool") and reports what they print.
 
 There are three Mac users:
@@ -19,8 +19,8 @@ There are three Mac users:
 | Mac user | Who uses it | What for |
 |---|---|---|
 | Jonathon's own account (administrator) | Jonathon | Setup, and reading reports. Nothing else. |
-| `wsagent` (standard, not administrator) | The AI agent | Running the four `wsmigrate` commands, and nothing else. |
-| `wsmigrate` (standard, not administrator) | The tool itself | Owns the keys, mapping, ledger and reports. Nobody signs in as it. |
+| `wsagent` (standard, not administrator) | The AI agent | Running the four `movingday` commands, and nothing else. |
+| `movingday` (standard, not administrator) | The tool itself | Owns the keys, mapping, ledger and reports. Nobody signs in as it. |
 
 **The agent must not run under Jonathon's account.** Jonathon's account is an
 administrator and can read everything, so an agent running there would not
@@ -66,71 +66,71 @@ Notes:
 - If Google refuses `calendar.acls.readonly` on the source, stop. The
   fallback is the full `https://www.googleapis.com/auth/calendar` scope on
   the source. This must be a recorded decision, and the code's scope list in
-  `wsmigrate/runtime.py` must be changed to match. See the rehearsal
+  `movingday/runtime.py` must be changed to match. See the rehearsal
   checklist.
 - The destination also needs an administrator address in the config
   (`dest_admin`). The tool uses it for directory lookups.
 
 ## 2. Create the two Mac users (Jonathon, by hand)
 
-The tool runs as its own Mac user, `wsmigrate`. The agent runs as a second
-Mac user, `wsagent`. `wsagent` can run the tool as `wsmigrate`, but cannot
-open `wsmigrate`'s files. That is how the agent is kept from seeing keys,
+The tool runs as its own Mac user, `movingday`. The agent runs as a second
+Mac user, `wsagent`. `wsagent` can run the tool as `movingday`, but cannot
+open `movingday`'s files. That is how the agent is kept from seeing keys,
 mapping files or reports.
 
 **These are changes to the Mac's security settings. Jonathon makes them. An
 agent must not.**
 
-1. Create a standard (not administrator) user named `wsmigrate`. Use System
+1. Create a standard (not administrator) user named `movingday`. Use System
    Settings, then Users & Groups. Give it a long random password and do not
    save it anywhere the agent can read. Its home folder is
-   `/Users/wsmigrate`.
+   `/Users/movingday`.
    Create a second standard (not administrator) user named `wsagent` the
    same way. The agent runs under this user. Never tell the agent either
    password, and never make `wsagent` an administrator.
 2. In a Terminal, make its home folder private:
 
    ```
-   sudo chmod 700 /Users/wsmigrate
+   sudo chmod 700 /Users/movingday
    ```
 
 3. Create the tool's folders as that user and set mode 700 on each:
 
    ```
-   sudo -u wsmigrate mkdir -p /Users/wsmigrate/keys /Users/wsmigrate/data /Users/wsmigrate/reports
-   sudo -u wsmigrate chmod 700 /Users/wsmigrate/keys /Users/wsmigrate/data /Users/wsmigrate/reports
+   sudo -u movingday mkdir -p /Users/movingday/keys /Users/movingday/data /Users/movingday/reports
+   sudo -u movingday chmod 700 /Users/movingday/keys /Users/movingday/data /Users/movingday/reports
    ```
 
 4. Install the tool in a virtual environment (a private copy of Python and
-   the tool's libraries) at `/Users/wsmigrate/venv`. Copy the project folder
-   to a place `wsmigrate` can read (for example a temporary folder). The
+   the tool's libraries) at `/Users/movingday/venv`. Copy the project folder
+   to a place `movingday` can read (for example a temporary folder). The
    temporary copy must not contain keys, CSV files, the ledger or reports,
    and must be deleted once the install is finished. Then:
 
    ```
-   sudo -u wsmigrate python3 -m venv /Users/wsmigrate/venv
-   sudo -u wsmigrate /Users/wsmigrate/venv/bin/pip install /path/to/project
+   sudo -u movingday python3 -m venv /Users/movingday/venv
+   sudo -u movingday /Users/movingday/venv/bin/pip install /path/to/project
    ```
 
    The tool needs Python 3.11 or newer.
-5. Put the files in place, each owned by `wsmigrate`, using `sudo`:
-   - the two service-account key files in `/Users/wsmigrate/keys/`
-   - the mapping file as `/Users/wsmigrate/data/mapping.csv`
-   - the inventory file as `/Users/wsmigrate/data/inventory.csv`
-   - the config file as `/Users/wsmigrate/data/config.toml`
+5. Put the files in place, each owned by `movingday`, using `sudo`:
+   - the two service-account key files in `/Users/movingday/keys/`
+   - the mapping file as `/Users/movingday/data/mapping.csv`
+   - the inventory file as `/Users/movingday/data/inventory.csv`
+   - the config file as `/Users/movingday/data/config.toml`
    - the ledger (progress database) is created by the tool at
-     `/Users/wsmigrate/data/ledger.sqlite`
-   - reports are written to `/Users/wsmigrate/reports/`
+     `/Users/movingday/data/ledger.sqlite`
+   - reports are written to `/Users/movingday/reports/`
 6. Make sure every file is mode 600 and every folder mode 700, and nothing is
    readable by other users:
 
    ```
-   sudo chmod -R go-rwx /Users/wsmigrate
-   ls -ld /Users/wsmigrate /Users/wsmigrate/*
+   sudo chmod -R go-rwx /Users/movingday
+   ls -ld /Users/movingday /Users/movingday/*
    ```
 
    The last command should show `drwx------` for every folder.
-   The config file and the mapping file must be owned by `wsmigrate` and
+   The config file and the mapping file must be owned by `movingday` and
    must not be writable by anyone else. The tool checks this every time it
    starts and refuses with the reason `untrusted_file` (exit 2) otherwise.
    This stops anyone pointing `--config` at a file of their own.
@@ -140,48 +140,48 @@ agent must not.**
 ## 3. Let the agent's user run only the tool (Jonathon, by hand)
 
 This sudoers line lets the `wsagent` Mac user run exactly one program, as
-`wsmigrate`, and nothing else. The agent runs under `wsagent`.
+`movingday`, and nothing else. The agent runs under `wsagent`.
 
 For the file protection to hold, `wsagent` must **not** be an administrator
 and must **not** have passwordless sudo for anything else. It must never be
-given Jonathon's password, the `wsagent` password or the `wsmigrate`
-password. If it can become root or the `wsmigrate` user in any other way, it
+given Jonathon's password, the `wsagent` password or the `movingday`
+password. If it can become root or the `movingday` user in any other way, it
 can read the keys and the data.
 
 Edit it with `visudo`, which checks the syntax before saving. A typo in a
 sudoers file can lock you out of `sudo`.
 
 ```
-sudo visudo -f /etc/sudoers.d/wsmigrate
+sudo visudo -f /etc/sudoers.d/movingday
 ```
 
 Put this single line in the file:
 
 ```
-wsagent ALL=(wsmigrate) NOPASSWD: /Users/wsmigrate/venv/bin/wsmigrate
+wsagent ALL=(movingday) NOPASSWD: /Users/movingday/venv/bin/movingday
 ```
 
 Save and exit. Then test it, signed in as `wsagent`:
 
 ```
 cd /
-sudo -u wsmigrate /Users/wsmigrate/venv/bin/wsmigrate check --config /Users/wsmigrate/data/config.toml
+sudo -u movingday /Users/movingday/venv/bin/movingday check --config /Users/movingday/data/config.toml
 ```
 
 An agent must not edit `/etc/sudoers.d/` or any sudoers file.
 
 ## 4. The config file
 
-TOML file at `/Users/wsmigrate/data/config.toml`. Every field is shown.
+TOML file at `/Users/movingday/data/config.toml`. Every field is shown.
 Replace the placeholders.
 
 ```toml
-source_key_file = "/Users/wsmigrate/keys/source-key.json"
-dest_key_file   = "/Users/wsmigrate/keys/dest-key.json"
-mapping_file    = "/Users/wsmigrate/data/mapping.csv"
-inventory_file  = "/Users/wsmigrate/data/inventory.csv"
-ledger_path     = "/Users/wsmigrate/data/ledger.sqlite"
-report_dir      = "/Users/wsmigrate/reports"   # must contain no spaces
+source_key_file = "/Users/movingday/keys/source-key.json"
+dest_key_file   = "/Users/movingday/keys/dest-key.json"
+mapping_file    = "/Users/movingday/data/mapping.csv"
+inventory_file  = "/Users/movingday/data/inventory.csv"
+ledger_path     = "/Users/movingday/data/ledger.sqlite"
+report_dir      = "/Users/movingday/reports"   # must contain no spaces
 dest_admin      = "admin@mig-b.example.org"    # admin address for directory lookups
 dest_domain     = "mig-b.example.org"          # the temporary destination domain
 parallel_users  = 4                            # optional, default 4
@@ -192,7 +192,7 @@ max_existing    = 5                            # optional, default 5
 - `max_existing` is how many messages a destination mailbox may already hold
   (Google's welcome mail). More than this and `copy` refuses to run.
 - `sudo` removes environment variables, so always pass `--config` on the
-  command line rather than relying on `WSMIGRATE_CONFIG`.
+  command line rather than relying on `MOVINGDAY_CONFIG`.
 
 ## 5. The mapping file
 
@@ -260,12 +260,12 @@ Group aliases are not checked by the tool. Check those by hand.
 ## 7. Running the tool
 
 All commands take `--config PATH`. The agent runs them in this form only,
-from a folder the `wsmigrate` user can read (run `cd /` first; the agent's
+from a folder the `movingday` user can read (run `cd /` first; the agent's
 own home folder is private to `wsagent`):
 
 ```
 cd /
-sudo -u wsmigrate /Users/wsmigrate/venv/bin/wsmigrate COMMAND --config /Users/wsmigrate/data/config.toml [options]
+sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/movingday/data/config.toml [options]
 ```
 
 | Command | What it does |
@@ -280,7 +280,7 @@ else.
 
 ### Rules for running
 
-- Run only one `wsmigrate` process per ledger file at a time. `copy` takes a
+- Run only one `movingday` process per ledger file at a time. `copy` takes a
   lock and refuses with `already_running` if another copy is running. Do not
   run `verify` for a batch while `copy` is running on it.
 - **A copy can take days.** The agent starts `copy` in the background (so it
@@ -288,7 +288,7 @@ else.
   `status` from time to time. `status` only reads the ledger and is safe
   while `copy` runs.
 - **Stopping a copy:** Ctrl-C does not stop a running copy promptly; the
-  users already being copied finish first. To stop it, kill the `wsmigrate`
+  users already being copied finish first. To stop it, kill the `movingday`
   process. Resuming later is safe: run the same `copy` again and it carries
   on where it stopped.
 - **Exit codes:**
@@ -298,7 +298,7 @@ else.
     exit 1 with a reason such as `internal_ValueError` or
     `internal_FileNotFoundError`.
   - `2`: refused to run (bad arguments, no config option, bad mapping,
-    config or mapping file not owned by `wsmigrate` or writable by others
+    config or mapping file not owned by `movingday` or writable by others
     (`untrusted_file`), unknown batch, destination not empty, already
     running).
 - **On any exit code other than 0 the agent stops and asks Jonathon.** For
@@ -332,7 +332,7 @@ rules with the destination's.
 
 `verify` prints only the report's file name (for example
 `mock-20261120-093000.html`). The file is in the `report_dir` from the
-config, here `/Users/wsmigrate/reports/`. Jonathon opens it (use `sudo` to
+config, here `/Users/movingday/reports/`. Jonathon opens it (use `sudo` to
 copy it somewhere he can read). The report shows the mapped user addresses,
 and for every check and every user the condition, the expected result and
 the actual result. It never contains mail content.
@@ -342,17 +342,17 @@ the actual result. It never contains mail content.
 Paste this block into the agent's instructions.
 
 ```
-You run the wsmigrate migration tool. Follow these rules exactly.
+You run Moving Day (`movingday`), the migration tool. Follow these rules exactly.
 
 1. Run only commands of this form, after "cd /":
-   sudo -u wsmigrate /Users/wsmigrate/venv/bin/wsmigrate COMMAND --config /Users/wsmigrate/data/config.toml [options]
+   sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/movingday/data/config.toml [options]
    COMMAND is one of: check, copy, status, verify. Nothing else.
    Start "copy" in the background and check on it with "status".
-2. Never read, list, copy or open any file under /Users/wsmigrate.
+2. Never read, list, copy or open any file under /Users/movingday.
 3. Never edit sudoers, file permissions, users or any Mac security setting.
    Never ask for, use or store any password. Your Mac user is not an
    administrator and must stay that way.
-4. Never run a second wsmigrate process while one is running.
+4. Never run a second movingday process while one is running.
 5. Exit code 0 is success. On any other exit code, stop and ask Jonathon.
    For verify, also stop and ask if "passed" is false or "failed_checks" is
    above 0. Do not retry and do not work around it.
@@ -385,18 +385,18 @@ Do this in order, by hand.
 3. Delete the key files:
 
    ```
-   sudo rm -P /Users/wsmigrate/keys/*
+   sudo rm -P /Users/movingday/keys/*
    ```
 
 4. Keep or archive the HTML reports as the sign-off record, if wanted. Copy
-   them out of `/Users/wsmigrate/reports/` first.
+   them out of `/Users/movingday/reports/` first.
 5. Delete the sudoers line:
 
    ```
-   sudo rm /etc/sudoers.d/wsmigrate
+   sudo rm /etc/sudoers.d/movingday
    ```
 
-6. Delete the `wsmigrate` Mac user, including its home folder (System
+6. Delete the `movingday` Mac user, including its home folder (System
    Settings, then Users & Groups, then delete the user and its folder). This
    removes the mapping, inventory, ledger and config. Delete the `wsagent`
    Mac user too.

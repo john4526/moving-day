@@ -1,11 +1,11 @@
 import pytest
 from fakes import make_apis
 
-from wsmigrate.calendar_copy import copy_calendars
-from wsmigrate.compare import InventoryError, compare_calendar, compare_inventory, compare_mail, load_inventory
-from wsmigrate.ledger import Ledger
-from wsmigrate.mail import copy_mail
-from wsmigrate.mapping import Mapping, User
+from movingday.calendar_copy import copy_calendars
+from movingday.compare import InventoryError, compare_calendar, compare_inventory, compare_mail, load_inventory
+from movingday.ledger import Ledger
+from movingday.mail import copy_mail
+from movingday.mapping import Mapping, User
 
 U, S, D = "u001", "s@x.org", "d@y.org"
 G = "team@group.calendar.google.com"

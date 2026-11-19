@@ -2,7 +2,7 @@ import csv
 import re
 from dataclasses import dataclass
 
-from wsmigrate.config import require_trusted
+from movingday.config import require_trusted
 
 COLUMNS = ("key", "source", "destination", "batch")
 

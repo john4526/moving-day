@@ -10,11 +10,11 @@ from dataclasses import asdict
 
 import pytest
 
-from wsmigrate import calendar_copy, mail, runtime, validation
-from wsmigrate.config import UntrustedFile, load_config
-from wsmigrate.ledger import Ledger
-from wsmigrate.mapping import MappingError, load_mapping
-from wsmigrate.safeout import emit, reason_for
+from movingday import calendar_copy, mail, runtime, validation
+from movingday.config import UntrustedFile, load_config
+from movingday.ledger import Ledger
+from movingday.mapping import MappingError, load_mapping
+from movingday.safeout import emit, reason_for
 
 
 class _Parser(argparse.ArgumentParser):
@@ -24,11 +24,11 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser():
-    p = _Parser(prog="wsmigrate", add_help=False)
+    p = _Parser(prog="movingday", add_help=False)
     sub = p.add_subparsers(dest="command", required=True)
     for name in ("check", "copy", "status", "verify"):
         s = sub.add_parser(name, add_help=False)
-        s.add_argument("--config", default=os.environ.get("WSMIGRATE_CONFIG"))
+        s.add_argument("--config", default=os.environ.get("MOVINGDAY_CONFIG"))
         if name != "check":
             s.add_argument("--batch", required=name in ("copy", "verify"))
         if name == "verify":

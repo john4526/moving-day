@@ -1,4 +1,4 @@
-"""In-memory stand-ins for wsmigrate.api.Gmail/Calendar/Directory."""
+"""In-memory stand-ins for movingday.api.Gmail/Calendar/Directory."""
 import copy
 import datetime
 import functools
@@ -6,8 +6,8 @@ import inspect
 import itertools
 from email.parser import BytesHeaderParser
 
-from wsmigrate.api import ApiError, RawMessage
-from wsmigrate.runtime import Apis
+from movingday.api import ApiError, RawMessage
+from movingday.runtime import Apis
 
 _ids = itertools.count(1)  # shared by every fake, so source and destination never issue the same id
 SYSTEM_LABELS = ["INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT", "CHAT"]

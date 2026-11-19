@@ -5,8 +5,8 @@ import re
 import pytest
 from fakes import make_apis
 
-from wsmigrate import cli, runtime
-from wsmigrate.ledger import Ledger
+from movingday import cli, runtime
+from movingday.ledger import Ledger
 
 VALIDATION_TESTS = {
     "test_mapping_valid", "test_inventory_present", "test_mail_none_missing", "test_mail_no_duplicates",
@@ -139,6 +139,7 @@ def test_report_shows_condition_expected_and_actual(env, capfd):
     _, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
     rows, text = report_rows(tmp / "r" / out[0]["report"])
     assert all(f"<th>{h}</th>" in text for h in ("Condition", "Expected", "Actual"))
+    assert "Moving Day sign-off report" in text
     result, condition, expected, actual = rows["test_validation.py::test_mail_none_missing[u001]"][:4]
     assert result == "Failed" and condition == "Every source message is present on the destination."
     assert (expected, actual) == ("0 missing", "1 missing")

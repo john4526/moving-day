@@ -1,4 +1,4 @@
-# Workspace migration utility
+# Moving Day (`movingday`): Workspace migration utility
 
 Command-line tool to copy mail and calendars between two Google Workspace
 accounts, operated by an AI agent with human approval of irreversible steps,
@@ -16,12 +16,12 @@ work through [docs/rehearsal-checklist.md](docs/rehearsal-checklist.md).
 Every command needs `--config PATH` and prints one line of JSON. `--help` is
 disabled. Exit codes: 0 success, 1 finished with failures, 2 refused to run.
 
-- `wsmigrate check --config PATH` : validates the mapping and access for all
+- `movingday check --config PATH` : validates the mapping and access for all
   users; no data moves
-- `wsmigrate copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...] --config PATH` :
+- `movingday copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...] --config PATH` :
   copies (both mail and calendar if neither flag is given); safe to re-run
-- `wsmigrate status [--batch NAME] --config PATH` : per-user counts
-- `wsmigrate verify --batch NAME [--expect-changes] --config PATH` : runs the
+- `movingday status [--batch NAME] --config PATH` : per-user counts
+- `movingday verify --batch NAME [--expect-changes] --config PATH` : runs the
   validation checks and writes the HTML report
 
 ## What must never be committed

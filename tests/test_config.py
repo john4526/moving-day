@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from wsmigrate.config import load_config
+from movingday.config import load_config
 
 BASE = '''
 source_key_file = "s.json"

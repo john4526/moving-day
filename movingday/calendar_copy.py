@@ -1,7 +1,7 @@
 """Calendar and sharing copy. Event content lives only in memory; the ledger gets ids, timestamps, states."""
 from dataclasses import dataclass
 
-from wsmigrate.api import ApiError
+from movingday.api import ApiError
 
 EVENT_FIELDS = ("summary", "description", "location", "start", "end", "recurrence", "iCalUID",
                 "attendees", "organizer", "reminders", "transparency", "visibility", "status",

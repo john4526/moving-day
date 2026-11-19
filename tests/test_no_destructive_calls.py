@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-PKG = Path(__file__).resolve().parent.parent / "wsmigrate"
+PKG = Path(__file__).resolve().parent.parent / "movingday"
 SOURCES = {p: p.read_text().splitlines() for p in PKG.rglob("*.py")}
 
 

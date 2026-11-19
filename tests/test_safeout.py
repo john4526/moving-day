@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from wsmigrate import safeout
-from wsmigrate.mapping import MappingError
+from movingday import safeout
+from movingday.mapping import MappingError
 
 
 def out(obj):

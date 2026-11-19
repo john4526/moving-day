@@ -1,9 +1,9 @@
 import pytest
 from fakes import make_apis
 
-from wsmigrate.api import ApiError
-from wsmigrate.ledger import Ledger
-from wsmigrate.mail import MailStats, copy_mail, msgid_hash
+from movingday.api import ApiError
+from movingday.ledger import Ledger
+from movingday.mail import MailStats, copy_mail, msgid_hash
 
 U = "u001"
 

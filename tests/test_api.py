@@ -1,7 +1,7 @@
 import pytest
 
 from fakes import FakeCalendar, make_apis
-from wsmigrate.api import ApiError, with_retry
+from movingday.api import ApiError, with_retry
 
 
 def _flaky(errors):
@@ -101,7 +101,7 @@ def test_http_errors_map_by_status_without_response_text():
     import httplib2
     from googleapiclient.errors import HttpError
 
-    from wsmigrate.api import _to_api_error
+    from movingday.api import _to_api_error
 
     def err(status, reason="x"):
         body = ('{"error": {"message": "secret@x.com", "errors": [{"reason": "%s"}]}}' % reason).encode()
@@ -147,7 +147,7 @@ def test_fake_insert_rejects_unknown_label_ids():
 def test_network_errors_map_to_retryable_api_error():
     import httplib2
 
-    from wsmigrate.api import _execute
+    from movingday.api import _execute
 
     class Req:
         def execute(self):
@@ -162,7 +162,7 @@ def test_network_errors_map_to_retryable_api_error():
 def test_incomplete_read_maps_to_retryable_network_error():
     import http.client
 
-    from wsmigrate.api import _execute
+    from movingday.api import _execute
 
     class Req:
         def execute(self):

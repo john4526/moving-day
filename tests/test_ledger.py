@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from wsmigrate.ledger import Ledger
+from movingday.ledger import Ledger
 
 _open = []
 
