@@ -3,7 +3,7 @@ import csv
 from collections import Counter
 from dataclasses import dataclass
 
-from wsmigrate.calendar_copy import translate_rules
+from wsmigrate.calendar_copy import select_calendars, translate_rules
 from wsmigrate.mail import SKIP_LABELS, _hash_header
 
 
@@ -72,9 +72,7 @@ def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user) ->
     dst_list = dst.list_calendars(dst_user)
     dst_cals = {c["id"] for c in dst_list}
     dst_has_primary = any(c["primary"] for c in dst_list)
-    for cal in src.list_calendars(src_user):
-        if cal["accessRole"] != "owner":
-            continue
+    for cal in select_calendars(src, ledger, user_key, src_user)[0]:
         key = "primary" if cal["primary"] else cal["id"]
         r.calendars_src += 1
         skipped = ledger.failed_event_ids(user_key, key, "unsupported_event_type")

@@ -128,11 +128,21 @@ def test_concurrent_writers_share_file(tmp_path):
         for i in range(25):
             led.mark_pending("u001", f"m{n}-{i}", "t", "h")
             led.mark_done("u001", f"m{n}-{i}", "d", "dt")
+        won.append(led.claim_calendar("g", f"u00{n}"))
         led.close()
+    won = []
     ts = [threading.Thread(target=work, args=(n,)) for n in range(4)]
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert len(make(tmp_path).done_ids("u001")) == 100
+    assert sorted(won) == [False, False, False, True]  # exactly one claimant
+
+
+def test_claim_calendar_first_claimant_wins(tmp_path):
+    led = make(tmp_path)
+    assert led.claim_calendar("g", "u001") is True
+    assert led.claim_calendar("g", "u002") is False
+    assert led.claim_calendar("g", "u001") is True
 
 
 def test_mark_failed_does_not_downgrade_done(tmp_path):

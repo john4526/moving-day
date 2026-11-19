@@ -7,6 +7,7 @@ from wsmigrate.ledger import Ledger
 from wsmigrate.mapping import Mapping, User
 
 U, S, D = "u001", "s@x.org", "d@y.org"
+G = "team@group.calendar.google.com"
 MAP = Mapping([User("u001", S, D, "b"), User("u002", "pal@x.org", "pal@y.org", "b")])
 
 
@@ -31,13 +32,13 @@ def dst_events(a, cal=D):
 
 def test_primary_and_secondary_calendars_copied(env):
     a, led = env
-    a.src_cal.add_calendar(S, "sec1", summary="Team", time_zone="Africa/Nairobi")
+    a.src_cal.add_calendar(S, G, summary="Team", time_zone="Africa/Nairobi")
     a.src_cal.add_event(S, S, {"summary": "p"})
-    a.src_cal.add_event(S, "sec1", {"summary": "q"})
+    a.src_cal.add_event(S, G, {"summary": "q"})
     st = run(env)
     assert st == CalStats(2, 2, 0, 0, 0, 0, 0)
     assert [e["summary"] for e in dst_events(a).values()] == ["p"]
-    new = led.cal_map(U)["sec1"]
+    new = led.cal_map(U)[G]
     assert led.cal_map(U)["primary"] == "primary"
     assert a.dst_cal.cals[D][new]["meta"]["summary"] == "Team"
     assert a.dst_cal.cals[D][new]["meta"]["timeZone"] == "Africa/Nairobi"
@@ -132,8 +133,8 @@ def test_unmapped_share_kept_and_counted(env):
 
 def test_share_resolving_to_dst_user_skipped(env):
     a, led = env
-    a.src_cal.add_calendar(S, "sec", summary="s")
-    a.src_cal.add_acl(S, "sec", {"role": "writer", "scope": {"type": "user", "value": D}})
+    a.src_cal.add_calendar(S, G, summary="s")
+    a.src_cal.add_acl(S, G, {"role": "writer", "scope": {"type": "user", "value": D}})
     st = run(env)
     assert st.acl_copied == 0 and st.outside_shares == 0
 
@@ -236,3 +237,21 @@ def test_failed_delete_recorded_and_retried(env):
     assert led.event_rows(U, "primary")[eid][2] == "failed"
     assert run(env).events_removed == 1
     assert led.event_rows(U, "primary") == {} and dst_events(a) == {}
+
+
+def test_delegated_other_user_primary_not_copied(env):
+    a, led = env
+    a.src_cal.add_calendar(S, "boss@x.org", summary="Boss", access_role="owner")  # "manage sharing" delegate
+    a.src_cal.add_event(S, "boss@x.org", {"summary": "x"})
+    st = run(env)
+    assert st.calendars == 1 and len(a.dst_cal.cals[D]) == 1
+    assert led.get_meta(U, "shared_calendars_skipped") == "1"
+    assert "boss@x.org" not in "\n".join(led.db.iterdump())
+
+
+def test_resource_calendar_skipped(env):
+    a, led = env
+    a.src_cal.add_calendar(S, "c_1@resource.calendar.google.com", access_role="owner")
+    st = run(env)
+    assert st.calendars == 1 and len(a.dst_cal.cals[D]) == 1
+    assert led.get_meta(U, "shared_calendars_skipped") == "1"

@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS events(
 CREATE TABLE IF NOT EXISTS meta(
   user_key TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL,
   PRIMARY KEY(user_key, name));
+CREATE TABLE IF NOT EXISTS calendar_claims(
+  src_cal TEXT PRIMARY KEY, user_key TEXT NOT NULL);
 """
 
 
@@ -117,6 +119,11 @@ class Ledger:
 
     def set_cal(self, user_key, src_cal, dst_cal):
         self._w("INSERT OR REPLACE INTO calendars VALUES(?,?,?)", (user_key, src_cal, dst_cal))
+
+    def claim_calendar(self, src_cal, user_key) -> bool:
+        """True if user_key is (or now becomes) the one user who copies this shared calendar."""
+        self._w("INSERT OR IGNORE INTO calendar_claims VALUES(?,?)", (src_cal, user_key))
+        return self._r("SELECT user_key FROM calendar_claims WHERE src_cal=?", (src_cal,))[0][0] == user_key
 
     def event_rows(self, user_key, src_cal):
         return {r[0]: (r[1], r[2], r[3]) for r in self._r(

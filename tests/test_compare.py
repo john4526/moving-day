@@ -8,6 +8,7 @@ from wsmigrate.mail import copy_mail
 from wsmigrate.mapping import Mapping, User
 
 U, S, D = "u001", "s@x.org", "d@y.org"
+G = "team@group.calendar.google.com"
 MAP = Mapping([User("u001", S, D, "b"), User("u002", "pal@x.org", "pal@y.org", "b")])
 
 
@@ -138,12 +139,12 @@ def cmp_cal(a, led):
 
 def test_calendar_counts_match_after_copy(cal):
     a, led = cal
-    a.src_cal.add_calendar(S, "sec1", summary="Team")
+    a.src_cal.add_calendar(S, G, summary="Team")
     a.src_cal.add_event(S, S, {"summary": "r", "recurrence": ["RRULE:FREQ=DAILY"], "id": "r1",
                                "attendees": [{"email": "a@x"}, {"email": "b@x"}]})
     a.src_cal.add_event(S, S, {"summary": "x", "id": "x1", "status": "cancelled", "recurringEventId": "r1"})
-    a.src_cal.add_event(S, "sec1", {"summary": "q"})
-    a.src_cal.add_acl(S, "sec1", {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
+    a.src_cal.add_event(S, G, {"summary": "q"})
+    a.src_cal.add_acl(S, G, {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
     copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
     r = cmp_cal(a, led)
     assert (r.calendars_src, r.calendars_dst) == (2, 2)
@@ -155,9 +156,9 @@ def test_calendar_counts_match_after_copy(cal):
 
 def test_missing_event_and_unmapped_calendar_counted(cal):
     a, led = cal
-    a.src_cal.add_calendar(S, "sec1")
+    a.src_cal.add_calendar(S, G)
     a.src_cal.add_event(S, S, {"summary": "p"})
-    a.src_cal.add_event(S, "sec1", {"summary": "q"})
+    a.src_cal.add_event(S, G, {"summary": "q"})
     r = cmp_cal(a, led)  # nothing copied
     assert (r.calendars_src, r.calendars_dst) == (2, 0)
     assert (r.events_src, r.events_dst) == (2, 0)
@@ -236,12 +237,30 @@ def test_event_missing_not_hidden_by_extra_event(cal):
 
 def test_events_missing_for_unmapped_and_deleted_destination_calendar(cal):
     a, led = cal
-    a.src_cal.add_calendar(S, "sec1")
-    a.src_cal.add_event(S, "sec1", {"summary": "q"})
-    a.src_cal.add_event(S, "sec1", {"summary": "q2"})
-    a.src_cal.add_acl(S, "sec1", {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
+    a.src_cal.add_calendar(S, G)
+    a.src_cal.add_event(S, G, {"summary": "q"})
+    a.src_cal.add_event(S, G, {"summary": "q2"})
+    a.src_cal.add_acl(S, G, {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
     r = cmp_cal(a, led)
     assert (r.events_missing, r.acl_missing) == (2, 1)
-    led.set_cal(U, "sec1", "gone")  # mapped, but deleted on the destination
+    led.set_cal(U, G, "gone")  # mapped, but deleted on the destination
     r = cmp_cal(a, led)
     assert (r.calendars_dst, r.events_missing, r.acl_missing) == (0, 2, 1)
+
+
+def test_group_calendar_owned_by_two_users_copied_once(cal):
+    a, led = cal
+    P, PD = "pal@x.org", "pal@y.org"
+    a.src_cal.add_calendar(P, P, primary=True)
+    a.dst_cal.add_calendar(PD, PD, primary=True)
+    for u in (S, P):  # one team calendar, co-managed: both see it with accessRole owner
+        a.src_cal.add_calendar(u, G, summary="Team")
+        a.src_cal.add_event(u, G, {"summary": "q", "id": "g1"})
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, "u002", P, PD)
+    assert len(a.dst_cal.cals[D]) == 2 and len(a.dst_cal.cals[PD]) == 1
+    assert led.get_meta(U, "shared_calendars_skipped") == "0"
+    assert led.get_meta("u002", "shared_calendars_skipped") == "1"
+    for key, su, du, n in ((U, S, D, 2), ("u002", P, PD, 1)):
+        r = compare_calendar(a.src_cal, a.dst_cal, led, MAP, key, su, du)
+        assert (r.calendars_src, r.calendars_dst, r.events_missing, r.acl_missing) == (n, n, 0, 0)

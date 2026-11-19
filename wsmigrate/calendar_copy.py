@@ -7,6 +7,7 @@ EVENT_FIELDS = ("summary", "description", "location", "start", "end", "recurrenc
                 "attendees", "organizer", "reminders", "transparency", "visibility", "status",
                 "sequence", "originalStartTime", "eventType")
 NONE = {"send_updates": "none"}
+GROUP_SUFFIX = "@group.calendar.google.com"
 
 
 @dataclass
@@ -106,13 +107,28 @@ def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st) -> int
     return failed
 
 
+def select_calendars(src, ledger, user_key, src_user):
+    """(calendars this user copies, owner-role calendars skipped). Copied: the primary calendar, and each
+    group calendar the user owns or manages, by the one user who claims it first. "owner" is also reported
+    for other people's calendars shared with "manage sharing"; those and resource calendars are skipped."""
+    out, skipped = [], 0
+    for cal in src.list_calendars(src_user):
+        if cal["primary"]:
+            out.append(cal)
+        elif cal["accessRole"] == "owner":
+            if cal["id"].endswith(GROUP_SUFFIX) and ledger.claim_calendar(cal["id"], user_key):
+                out.append(cal)
+            else:
+                skipped += 1
+    return out, skipped
+
+
 def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user) -> CalStats:
     st = CalStats()
     cmap = ledger.cal_map(user_key)
     acl_failed = 0
-    for cal in src.list_calendars(src_user):
-        if cal["accessRole"] != "owner":
-            continue
+    cals, skipped = select_calendars(src, ledger, user_key, src_user)
+    for cal in cals:
         st.calendars += 1
         key = "primary" if cal["primary"] else cal["id"]
         if key not in cmap:
@@ -122,4 +138,5 @@ def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user) -> C
         acl_failed += _sharing(src, dst, mapping, src_user, dst_user, cal["id"], cmap[key], st)
     ledger.set_meta(user_key, "outside_shares", str(st.outside_shares))
     ledger.set_meta(user_key, "acl_failed", str(acl_failed))
+    ledger.set_meta(user_key, "shared_calendars_skipped", str(skipped))
     return st
