@@ -1,6 +1,6 @@
 # Migration utility: design (draft for approval)
 
-Date: 18 November 2026. Status: draft, not approved. Nothing is built yet.
+Date: 18 November 2026. Status: approved by Jonathon Kline on 18 November 2026. Nothing is built yet.
 
 ## Intent
 
@@ -18,8 +18,8 @@ during the cutover weekend and is outside this tool.
 - Copy every in-scope message, with its labels, read state, dates and threads.
 - Copy every in-scope calendar: events, recurring series, attendees, and
   sharing settings.
-- Safe to re-run: a second run copies only what is new (this is the final
-  sync after cutover) and never creates duplicates.
+- Safe to re-run: a second run copies only what is missing and never
+  creates duplicates.
 - Resumable: an interrupted run continues where it stopped.
 - The agent never sees mail or calendar content.
 - A per-user HTML validation report a non-technical approver can read.
@@ -48,10 +48,11 @@ during the cutover weekend and is outside this tool.
 - The parent organisation controls the source account. Access there needs
   their super administrator to grant domain-wide delegation to a service
   account. **That grant cannot be limited to our users: technically it can
-  read every mailbox in the parent's account.** See Open questions.
+  read every mailbox in the parent's account.** Assumed granted (your
+  instruction, 18 Nov); not yet confirmed with the parent organisation.
 - The destination users sit on a temporary domain until cutover. After
   cutover the source users are renamed. The tool therefore tracks users by
-  Google's permanent user ID, not by email address.
+  a fixed key from the mapping file, not by email address.
 - Budget: $0 tool licences. Small running cost if a cloud machine is used.
 
 ## Approaches considered
@@ -65,6 +66,66 @@ during the cutover weekend and is outside this tool.
 - **C. Buy MigrationWiz, build only the tests.** Least effort, but $1,225 at
   70 users (at the budget ceiling with queuing) and a third party processes
   all stored data.
+
+## Schedule (decided 18 Nov: queue first, then copy)
+
+1. Route inbound mail to the queuing service.
+2. Freeze: users stop using the old account (no reading, filing, sending or
+   calendar changes). Queuing only stops new inbound mail; without the
+   freeze, changes made during the copy would be missed.
+   The freeze is enforced by a lockout, done by the parent organisation's
+   administrator for our users only: reset each password to a random value
+   and sign out all sessions. The accounts stay active, so the tool can
+   still read them. Suspending the accounts or switching off Gmail is not
+   used, because both are expected to block the tool as well. *To confirm
+   in the rehearsal: the copy works on a locked account, and phones and
+   mail apps are cut off.* If the parent uses single sign-on, the lock is
+   applied in their sign-in system instead.
+3. Copy all mail and calendars to the destination on its temporary domain.
+4. Run the validation tests; a person reviews the report and gives go/no-go.
+5. People move the domain and repoint mail routing to the new account.
+6. People release the queue.
+
+Because nothing changes in the source during the copy, the destination
+matches it exactly and no second "catch-up" pass for changed mail is needed.
+
+**Consequence:** staff receive no new mail from step 1 until step 6, except
+addresses forwarded live by the queuing service. That outage lasts as long
+as the copy. Users are copied in parallel, so the largest mailbox sets the
+duration. At the assumed speed of about one message per second, a mailbox of
+100,000 messages takes more than a day. The rehearsal measures real speed
+and mailbox sizes before the weekend is fixed.
+
+**Fallback if the copy will not fit the window** (your decision at that
+point): copy mail older than 30 days in the week before, since old mail
+rarely changes, and copy only the last 30 days during the freeze.
+
+## Stages before the real cutover
+
+1. **Rehearsal** on two trial Workspace accounts and a spare domain, with
+   made-up data. First time the tool touches Google. Includes a practice
+   domain move.
+   The "spare domain" throughout this document can be subdomains of a
+   domain whose DNS we can edit (for example `mig-a.`, `mig-b.` and
+   `mig-move.`), so nothing needs buying. To confirm when setting up: Google
+   accepts a subdomain for a trial account's own address, and whoever
+   controls DNS will add the records.
+2. **Mock on a subset of real users** (your decision, 18 Nov). `check`
+   measures mailbox sizes for all users without copying. A small group of
+   volunteers, including the largest mailbox, is locked out and copied, and
+   the validation report is produced. This gives real speed, proves the
+   lockout, and exercises the report. Mail keeps arriving in the old
+   account during the mock, so the "freeze held" check is reported as
+   expected-to-differ, not as a failure.
+3. **Queue test.** Mail routing is set per domain, not per user, so the
+   queue cannot be switched on for the subset alone on the live domain.
+   It is tested on the spare domain during the rehearsal if the vendor
+   allows it. Two questions for the vendor before buying: does one purchase
+   cover a test domain or a trial, and can the queue be used twice.
+4. After the mock, decide what happens to the subset's trial copy: keep it
+   and top up at cutover (short outage, older mail shows its state as of
+   the mock), or have an administrator delete and recreate those
+   destination users so they are copied fresh.
 
 ## How it works
 
@@ -101,14 +162,21 @@ user. They are deleted and the delegation revoked after sign-off.
 
 ### Mapping file
 
-A CSV: source address, destination address, batch name. The tool resolves
-each to a permanent Google user ID on first run and stores it. Because
-access is granted by address, each later run takes the user's current
-address from an updated mapping file and checks it still resolves to the
-stored ID. The mapping file also defines which users are "ours". It refuses to
-run if any source or destination appears twice, or if a destination mailbox
-already holds mail it did not put there (unless explicitly overridden for
-that user).
+A CSV with four columns: key (u001, u002, ...), source address, destination
+address, batch name. The key is the user's permanent name inside the tool:
+the ledger, the agent-facing output and the test names all use it. It also
+defines which users are "ours".
+
+*Changed at planning, 18 Nov:* the draft tracked users by Google's permanent
+user ID. That needs directory access on the source, which the tool does not
+have, and under the queue-then-copy schedule all copying finishes before
+any address is renamed. The key column does the same job with no extra
+access.
+
+The tool refuses to run if any key, source or destination appears twice, or
+if a destination mailbox already holds more than a handful of messages it
+did not put there (default limit 5, to allow for Google's welcome mail),
+unless explicitly overridden for that user.
 
 ### Mail copy
 
@@ -177,9 +245,11 @@ code path that modifies the source.
 - Users appear in agent-facing output as short keys (u001, u002). The HTML
   report for the human approver shows the real addresses.
 - Google error messages are reduced to their error code before printing.
-- The agent's instructions forbid opening the key files, the ledger or the
-  mapping file directly. *This is a rule, not a technical barrier, unless the
-  tool runs under a separate operating-system user. See Open questions.*
+- The agent is Claude, or Codex as a stand-in. The tool runs under its own
+  operating-system user on the machine. The agent's user may run the four
+  commands as that user and nothing else, so it cannot open the key files,
+  the ledger or the mapping file. *My call.* Assumed machine: your Mac, kept
+  awake for the duration of the copy.
 
 ### Steps only a person does
 
@@ -207,9 +277,11 @@ with made-up data:
   sender and event title is copied, and the test fails if the marker appears
   anywhere in output, logs, the ledger or the HTML report
 
-**2. Pilot tests (two test accounts with seeded made-up data).** The same
-checks, against real Google accounts, plus the three calendar items listed
-above as unconfirmed.
+**2. Rehearsal tests (two trial Workspace accounts and a spare domain, with
+seeded made-up data).** The same checks against real Google accounts, plus:
+the calendar items listed above as unconfirmed, measured copy speed, and a
+full practice of the domain move to see what happens to meetings when the
+organiser's address changes account.
 
 **3. Validation tests (the real migration, per user, per batch).**
 - message count on the destination matches the source, per label
@@ -221,6 +293,8 @@ above as unconfirmed.
   destination
 - no message appears twice on the destination
 - nothing is left in the failed list, or each failure is listed by reason
+- the freeze held: each source mailbox's change marker is the same at the
+  end of the copy as at the start
 
 The report shows pass/fail per user and per check, with counts only.
 
@@ -229,25 +303,14 @@ The report shows pass/fail per user and per check, with counts only.
 File layout, the fake API's design, parallelism level, backoff timings, and
 the report's styling.
 
-## Open questions (yours to answer)
+## Decisions and what is still open
 
-1. **Parent organisation access.** Will their super administrator grant
-   delegation that can technically read all their mailboxes? If not, the
-   fallback is that their administrator runs the source-reading half on
-   their own machine, or the project falls back to option C.
-2. **Which agent, and where does it run?** This decides whether the privacy
-   rules can be enforced technically (separate operating-system user for the
-   tool) or only by instruction. It also needs a machine that stays on for
-   the days the pre-copy takes.
-3. **What the final sync carries for mail.** Between pre-copy and cutover
-   users keep reading, filing and deleting. As designed, the final sync adds
-   new mail only: a message read or deleted in that window shows as unread
-   or reappears on the new account. Carrying those changes needs a much
-   broader destination permission (read and remove any message). Calendar
-   changes are carried either way.
-4. **Rehearsing the domain move.** Two pilot accounts cannot show what
-   happens to meetings when the organiser's address changes account. A
-   rehearsal needs a spare domain and two trial Workspace accounts;
-   otherwise this is first seen on cutover weekend.
-5. **Total mail volume.** Unknown. It sets how many days the pre-copy needs.
-   The `check` command can measure it once access exists.
+Decided by you on 18 Nov: parent access assumed; agent is Claude or Codex;
+a rehearsal with a spare domain is supported; queue first, then copy; no
+limit on how far back mail is copied.
+
+Still open, settled by the rehearsal rather than by a decision now:
+
+- Total mail volume and real copy speed, which set how long the mail outage
+  lasts and whether the fallback above is needed.
+- The Google API behaviours marked "confirm in pilot" in this document.
