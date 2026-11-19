@@ -1,15 +1,114 @@
-# Moving Day (`movingday`): Workspace migration utility
+# Moving Day
 
-Command-line tool to copy mail and calendars between two Google Workspace
-accounts, operated by an AI agent with human approval of irreversible steps,
-and validated by a test suite with HTML reports.
+Moving Day (`movingday`) is a command-line tool that copies mail and calendars
+from one Google Workspace account to another, so a domain can move between
+accounts without a per-user migration licence and without a third party
+handling stored mail.
 
-**Status:** built; rehearsal not yet done.
+It is built to be run by an AI agent, or by a person typing the same four
+commands. People approve every irreversible step, and a per-user validation
+report is the evidence for sign-off.
+
+**Status:** built, with 164 logic tests passing against a simulated Google
+API. It has not yet been run against real Google Workspace accounts. Work
+through [docs/rehearsal-checklist.md](docs/rehearsal-checklist.md) before any
+real copy.
+
+## What it does
+
+- Copies every in-scope message with its labels, read and starred state,
+  dates and threads.
+- Copies calendars: events, recurring series, attendees and sharing settings,
+  without re-sending invitations.
+- Is safe to re-run. A second run copies only what is missing and creates no
+  duplicates. An interrupted run resumes where it stopped.
+- Reads the source account only. There is no delete command and no code path
+  that changes the source.
+- Keeps mail content out of its output, logs and reports. The operator sees
+  user keys, counts and reason codes, never subjects, bodies or event titles.
+- Writes an HTML validation report showing, for every user and every check,
+  the condition, the expected result and the actual result.
+
+## What it does not do
+
+- Contacts, Drive files and shared drives.
+- Gmail settings: filters, signatures, forwarding and send-as.
+- Spam, Trash, Chat history and unsent drafts.
+- Creating users, groups and aliases. These are created by hand; the
+  validation report checks they exist.
+- DNS changes, releasing or claiming the domain, and mail routing.
+- Holding new inbound mail during the move. Use a separate mail queuing
+  service for that.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  admin["Source administrator<br/>grants read access"]
+  op["Operator or AI agent<br/>runs four commands"]
+
+  subgraph SRC["Old Google Workspace account · read only"]
+    sg["Gmail"]
+    sc["Calendar"]
+  end
+
+  subgraph HOST["Operator machine"]
+    md["Moving Day<br/>check · copy · status · verify"]
+    led[("Progress ledger<br/>SQLite")]
+    cfg["Keys, config, mapping<br/>and inventory files"]
+  end
+
+  subgraph DST["New Google Workspace account · temporary domain"]
+    dg["Gmail"]
+    dc["Calendar"]
+    dd["Directory"]
+  end
+
+  rep["Validation report<br/>HTML · pass or fail per user"]
+  appr["Approver<br/>go or no-go"]
+  senders["Outside senders"]
+  q["Mail queue<br/>separate service"]
+
+  admin --> SRC
+  op --> md
+  SRC -- "read" --> md
+  md -- "insert" --> DST
+  md <--> led
+  cfg --> md
+  md --> rep --> appr
+  senders --> q -- "after the domain moves" --> DST
+```
+
+- **Copy path:** Moving Day runs on one operator machine. It reads from the
+  old account and inserts into the new one. Nothing passes through a third
+  party.
+- **Access:** two service accounts, one per Google account, each with the
+  narrowest scopes that work. The source side is read-only. The destination
+  side can insert mail and create calendar items, and can read message
+  headers for validation, but not message bodies.
+- **State:** a local SQLite ledger records what has been copied, which is
+  what makes re-runs and resumes safe.
+- **Mapping file:** a CSV with four columns (key, source address, destination
+  address, batch). It decides whose mail goes where and which users are in
+  scope. The tool refuses to run on duplicate keys or addresses, or if a
+  destination mailbox already holds mail it did not put there.
+- **Control:** the operator or agent only runs the four commands. A person
+  reads the report and gives the go or no-go.
+- **Mail queue:** not part of this tool. A separate service holds new inbound
+  mail while the domain is between accounts.
 
 See [docs/design.md](docs/design.md) for intent, scope, privacy rules and the
-test plan. To set the tool up and run it, read
-[docs/operator-setup.md](docs/operator-setup.md). Before the real copy,
-work through [docs/rehearsal-checklist.md](docs/rehearsal-checklist.md).
+test plan.
+
+## How a migration runs
+
+1. **Test:** a rehearsal on two trial Google Workspace accounts with made-up
+   data.
+2. **Mock:** a few real volunteers are copied and the validation report is
+   reviewed.
+3. **Cutover:** inbound mail is routed to a queue, users are locked out of the
+   old account, everyone is copied and verified, and only then is the domain
+   moved.
 
 ## Usage
 
@@ -23,6 +122,28 @@ disabled. Exit codes: 0 success, 1 finished with failures, 2 refused to run.
 - `movingday status [--batch NAME] --config PATH` : per-user counts
 - `movingday verify --batch NAME [--expect-changes] --config PATH` : runs the
   validation checks and writes the HTML report
+
+To set the tool up and run it, read
+[docs/operator-setup.md](docs/operator-setup.md).
+
+## Requirements
+
+- Python 3.11 or later.
+- macOS or Linux. The tool uses a POSIX file lock and a POSIX file-ownership
+  check, so it does not run on native Windows. On Windows, run it inside
+  Windows Subsystem for Linux (WSL), and keep the config, mapping and key
+  files inside the Linux home folder. WSL has not been tested yet.
+- A super administrator in each Google Workspace account to create a service
+  account and grant domain-wide delegation. On the source side that grant
+  cannot be limited to the users being moved.
+
+To run the logic tests, which need no Google access:
+
+```
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/python -m pytest
+```
 
 ## What must never be committed
 
