@@ -347,3 +347,31 @@ These were made while building the tool. Approved sections above are unchanged.
   location, birthdays) are reported, not treated as failures.
 - `--help` is disabled; every output is one JSON line.
 - `check` is now a pre-migration scan: `--source-only` uses the source key only, and the output adds own, delegated and team calendar counts and a summary. Comparisons no longer claim shared calendars.
+
+## Contacts (added 19 November 2026, approved)
+
+Scope change: contacts are now in scope. Each person's saved contacts ("My
+Contacts") are copied with their labels. "Other contacts" (addresses Gmail
+saves automatically for autocomplete) are not copied (decision A, 19 Nov);
+the scan and the report show how many each person has, for information.
+
+- API: Google People API. Source scopes add `contacts.readonly` and
+  `contacts.other.readonly` (count only); destination adds `contacts`.
+- Copied fields: names, email addresses, phone numbers, addresses,
+  organisations, notes (biographies), birthdays, events, URLs, relations,
+  nicknames, and label membership (user labels mapped by name; starred kept).
+  Photos are not copied.
+- Resumable and re-runnable via the ledger (source and destination resource
+  names, source etag, state, reason — no contact data). A contact edited on
+  the source since the last run is updated on the destination; nothing is
+  duplicated. The tool never deletes contacts; a contact removed on the
+  source since an earlier run is counted for information.
+- `copy` gains `--contacts`; with no part flags, mail, calendars and
+  contacts are all copied.
+- `check` reports contacts and other contacts per person.
+- The report adds checks with expected and actual: contact count, contacts
+  missing on the destination, label count, contacts per label; and an
+  informational line for other contacts not copied and contacts removed on
+  the source.
+- People API behaviours not yet confirmed (bulk-create limits, label
+  handling, starred) go on the rehearsal checklist.
