@@ -142,6 +142,8 @@ class FakeCalendar(_Fake):
         return t.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     def _cal(self, user, cal_id):
+        if cal_id == "primary":
+            cal_id = next((i for i, c in self.cals.get(user, {}).items() if c["meta"]["primary"]), cal_id)
         c = self.cals.get(user, {}).get(cal_id)
         if c is None:
             raise ApiError("http_404", False)
