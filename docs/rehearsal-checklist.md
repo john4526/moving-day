@@ -131,6 +131,22 @@ an item says "else", the fallback is named.
 - [ ] A copy moved to the destination trash is restorable.
 - [ ] What Drive does with another owner's copy inside a folder its owner
   trashes (the tool moves its own copies out first).
+- [ ] Under `drive.file`, user A's token can create a file in, and move a
+  file into and out of, a folder the tool created as user B; and it can
+  `files.get("root")` and create with `parents=[root]`.
+- [ ] `permissions.list` on a My Drive item also returns the permissions it
+  inherits from its folder. Confirm the tool's explicit copy of each on
+  every child is acceptable, and whether removing an inherited-only
+  permission gives 403.
+- [ ] A file's `version` does not change between runs when nobody touched
+  it (else every top-up re-copies it and "Drive in step" stays red).
+- [ ] Time of a no-change Drive top-up and of `verify` on the largest Drive:
+  ______ (this sets the floor for the Drive part of the mail outage).
+- [ ] Drive accepts `createdTime` on create. Else drop it from the create
+  metadata in `movingday/drive_copy.py`.
+- [ ] While two mapped users both have a copy of the same folder (ownership
+  moved, the old copy not yet trashed), which copy `dst_folder` returns for
+  its children, and whether the next run corrects their placement.
 
 ## E. Directory
 

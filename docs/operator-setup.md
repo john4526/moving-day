@@ -58,7 +58,7 @@ already in each destination mailbox.
 | Largest mailboxes (`largest_mailbox`, each `src_messages`) | Who must be in the mock, and how long the freeze must be. |
 | `total_messages` and the speed seen in the rehearsal | Which mail copy method to use. |
 | `contacts`, `other_contacts`, `total_contacts` | How big the contacts copy is. Other contacts (addresses Gmail saved for autocomplete) are counted for information and not copied. |
-| `drive_files`, `drive_folders`, `drive_bytes`, `total_drive_bytes`, `largest_drive_bytes` | How long the Drive pre-copy takes, and whether anyone is near Google's 750 GB per user per day upload limit. `drive_files` counts every owned file, including the types below. |
+| `drive_files`, `drive_folders`, `drive_bytes`, `total_drive_bytes`, `largest_drive_bytes` | How long the Drive pre-copy takes, and whether anyone is near Google's 750 GB per user per day upload limit. `drive_files` counts every owned file, including the types below. `drive_bytes` leaves out Google Docs, Sheets and Slides (Google gives them no size), so the real upload is larger: treat the 750 GB planning figure as a floor. Before the mock, compare each person's `drive_bytes` with their destination storage allowance. |
 | `drive_unsupported`, `drive_forms` | Files Google cannot export (Forms counted separately). They are not copied; tell their owners. |
 | `drive_shared_from_outside` | Files a person can open that someone outside the mapping file owns. Not copied; for information. |
 | `drive_in_others_folders` | Files a person owns inside someone else's folder. Copy the folder owners' batch first, or re-run once at the end. |
@@ -102,12 +102,15 @@ Notes:
 - The source grant cannot be limited to our users. Technically it can read
   every mailbox, and every Drive file, in the parent organisation.
 - For Drive, the source grant adds only `drive.readonly`. If the source
-  entry already exists, add that one scope to it.
+  entry already exists, add that one scope to it. Revoke the source grant as
+  soon as the migration is signed off (see Teardown).
+- All source APIs share one scope list. Until the parent organisation adds
+  `drive.readonly`, every copy fails, mail, calendars and contacts included,
+  not only Drive.
 - The destination uses `drive.file`: the tool sees only the files it created.
   If the rehearsal shows that is not enough, the fallback is the full
   `https://www.googleapis.com/auth/drive` scope on the destination, recorded
-  as a decision, with `movingday/runtime.py` changed to match. Revoke it as soon as the
-  migration is signed off (see Teardown).
+  as a decision, with `movingday/runtime.py` changed to match.
 - If Google refuses `calendar.acls.readonly` on the source, stop. The
   fallback is the full `https://www.googleapis.com/auth/calendar` scope on
   the source. This must be a recorded decision, and the code's scope list in
