@@ -15,6 +15,9 @@ EXPECTED = {
     "test_mail_label_counts": "0 labels with different counts",
     "test_calendar_sharing": "0 missing shares",
     "test_calendar_events_missing": "0 missing events",
+    "test_contacts_count": "as many contacts as the source",
+    "test_contacts_missing": "0 missing contacts",
+    "test_contact_labels": "as many labels as the source\n0 labels short of members",
     "test_nothing_left_failed": "0 failed",
     "test_carried_over_notes": "for information",
 }
@@ -88,8 +91,28 @@ def test_calendar_events_missing(cal, record_property):
     assert cal.events_missing == 0, f"events_missing={cal.events_missing}"
 
 
+def test_contacts_count(con, record_property):
+    """The destination has as many contacts as the source."""
+    _show(record_property, f"contacts: {con.contacts_src} (same as source)", f"contacts: {con.contacts_dst}")
+    assert con.contacts_src == con.contacts_dst, f"contacts source={con.contacts_src} destination={con.contacts_dst}"
+
+
+def test_contacts_missing(con, record_property):
+    """Every source contact has been copied and is present on the destination."""
+    _show(record_property, EXPECTED["test_contacts_missing"], f"{con.contacts_missing} missing contacts")
+    assert con.contacts_missing == 0, f"contacts_missing={con.contacts_missing}"
+
+
+def test_contact_labels(con, record_property):
+    """Every contact label on the source exists on the destination with at least as many contacts."""
+    _show(record_property, f"labels: {con.labels_src} (same as source)\n0 labels short of members",
+          f"labels: {con.labels_dst}\n{con.label_member_mismatches} labels short of members")
+    assert con.labels_src == con.labels_dst and con.label_member_mismatches == 0, (
+        f"labels source={con.labels_src} destination={con.labels_dst} short={con.label_member_mismatches}")
+
+
 def test_nothing_left_failed(ledger, user, record_property):
-    """No message or event is left in a failed state (unsupported event types excepted)."""
+    """No message, event or contact is left in a failed state (unsupported event types excepted)."""
     # unsupported event types are expected and retried every run (R5)
     left = {k: v for k, v in sorted(ledger.failures(user.key).items()) if k != "unsupported_event_type"}
     n = sum(left.values())
@@ -113,7 +136,8 @@ def test_freeze_held(ledger, user, request, record_property):
 def test_carried_over_notes(mail, ledger, user, record_property):
     """For information (always passes): threads on each side (a difference means split threads), messages with
     no Date header, calendar entries of unsupported types not copied, shares outside our domain, shares that
-    failed, and calendars shared with the user that were skipped."""
+    failed, calendars shared with the user that were skipped, other contacts (not copied) and contacts removed
+    on the source since an earlier run."""
     def meta(name):
         return ledger.get_meta(user.key, name) or "not recorded"
 
@@ -122,5 +146,7 @@ def test_carried_over_notes(mail, ledger, user, record_property):
              "calendar entries of unsupported types not copied: "
              f"{ledger.failures(user.key).get('unsupported_event_type', 0)}",
              f"outside shares: {meta('outside_shares')}", f"failed shares: {meta('acl_failed')}",
-             f"shared calendars skipped: {meta('shared_calendars_skipped')}"]
+             f"shared calendars skipped: {meta('shared_calendars_skipped')}",
+             f"other contacts not copied: {meta('other_contacts')}",
+             f"contacts removed on source: {meta('contacts_removed_on_source')}"]
     _show(record_property, EXPECTED["test_carried_over_notes"], "\n".join(notes))

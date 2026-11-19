@@ -6,13 +6,14 @@ import pytest
 from fakes import make_apis
 
 from movingday import cli, runtime
+from movingday.api import ApiError
 from movingday.ledger import Ledger
 
 VALIDATION_TESTS = {
     "test_mapping_valid", "test_inventory_present", "test_mail_none_missing", "test_mail_no_duplicates",
     "test_mail_no_foreign_messages", "test_mail_label_counts", "test_calendar_counts",
     "test_calendar_sharing", "test_calendar_events_missing", "test_nothing_left_failed", "test_freeze_held",
-    "test_carried_over_notes",
+    "test_carried_over_notes", "test_contacts_count", "test_contacts_missing", "test_contact_labels",
 }
 
 
@@ -162,9 +163,9 @@ def test_session_fixture_failure_keeps_condition_on_every_row(env, capfd, monkey
     code, out, cap = run(capfd, "verify", "--batch", "b1", "--config", cfg)
     assert code == 1 and len(out) == 1 and cap.err == ""
     rows, _ = report_rows(tmp / "r" / out[0]["report"])
-    assert len(rows) == 22 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
-    uses_apis = [t for t in rows if "_mail_" in t or "_calendar_" in t or "inventory" in t]
-    assert len(uses_apis) == 15 and all(rows[t][3] == "error: http_403" for t in uses_apis)
+    assert len(rows) == 28 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
+    uses_apis = [t for t in rows if "_mail_" in t or "_calendar_" in t or "_contact" in t or "inventory" in t]
+    assert len(uses_apis) == 21 and all(rows[t][3] == "error: http_403" for t in uses_apis)
     assert rows["test_validation.py::test_mail_none_missing[u001]"][2] == "0 missing"  # static expected
     assert rows["test_validation.py::test_calendar_counts[u001]"][2] == "—"  # data-dependent: unknown
 
@@ -211,7 +212,8 @@ def test_carried_over_notes_shows_counts_for_information(env, capfd):
     assert actual.splitlines() == [
         "threads: 3 on source, 3 on destination", "messages with no Date header: 1",
         "calendar entries of unsupported types not copied: 1", "outside shares: 2", "failed shares: 1",
-        "shared calendars skipped: 3"]
+        "shared calendars skipped: 3", "other contacts not copied: 0",
+        "contacts removed on source: 0"]
 
 
 def test_nothing_left_failed_lists_reasons(env, capfd):
@@ -226,3 +228,65 @@ def test_nothing_left_failed_lists_reasons(env, capfd):
     rows, _ = report_rows(tmp / "r" / out[0]["report"])
     assert rows["test_validation.py::test_nothing_left_failed[u001]"][3] == "3 failed (http_403: 2, network_error: 1)"
     assert rows["test_validation.py::test_nothing_left_failed[u002]"][3] == "0 failed"
+
+
+def _contact(apis, name, groups=()):
+    meta = {"source": {"type": "CONTACT", "id": "x"}}
+    return apis.src_people.add_contact("a@old.org", {
+        "names": [{"givenName": name, "metadata": meta}],
+        "memberships": [{"contactGroupMembership": {"contactGroupResourceName": g}} for g in groups],
+        "metadata": {"sources": [{"type": "CONTACT", "id": "x", "etag": "e"}]}})
+
+
+def test_contact_checks_pass_after_copy_and_show_counts(env, capfd):
+    apis, cfg, tmp = env
+    g = apis.src_people.add_group("a@old.org", "Team")
+    _contact(apis, "one", [g]), _contact(apis, "two")
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 0
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    count = rows["test_validation.py::test_contacts_count[u001]"]
+    assert count[:4] == ["Passed", "The destination has as many contacts as the source.",
+                         "contacts: 2 (same as source)", "contacts: 2"]
+    assert rows["test_validation.py::test_contacts_missing[u001]"][2:4] == ["0 missing contacts", "0 missing contacts"]
+    labels = rows["test_validation.py::test_contact_labels[u001]"]
+    assert labels[2:4] == ["labels: 1 (same as source)\n0 labels short of members",
+                           "labels: 1\n0 labels short of members"]
+    assert rows["test_validation.py::test_contacts_count[u002]"][3] == "contacts: 0"
+
+
+def test_missing_contact_fails_checks(env, capfd):
+    apis, cfg, _ = env
+    g = apis.src_people.add_group("a@old.org", "Team")
+    _contact(apis, "one", [g]), _contact(apis, "two", [g])
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    apis.dst_people.contacts["a@new.org"].popitem()
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1
+    for name in ("test_contacts_count", "test_contacts_missing", "test_contact_labels"):
+        assert check(out, name, "u001")[0]["ok"] is False and check(out, name, "u002")[0]["ok"] is True
+
+
+def test_failed_contact_fails_nothing_left_failed(env, capfd):
+    apis, cfg, tmp = env
+    _contact(apis, "one")
+    apis.dst_people.fail_next("create_contact", ApiError("http_500", False))
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    assert rows["test_validation.py::test_nothing_left_failed[u001]"][3] == "1 failed (http_500: 1)"
+
+
+def test_carried_over_notes_shows_other_contacts_and_removed_on_source(env, capfd):
+    apis, cfg, tmp = env
+    res = _contact(apis, "one")
+    apis.src_people.set_other_contacts("a@old.org", 9)
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    del apis.src_people.contacts["a@old.org"][res]
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    lines = rows["test_validation.py::test_carried_over_notes[u001]"][3].splitlines()
+    assert "other contacts not copied: 9" in lines and "contacts removed on source: 1" in lines
+    assert "other contacts not copied: 0" in rows["test_validation.py::test_carried_over_notes[u002]"][3]

@@ -13,6 +13,13 @@ def _run_all(env, capfd):
     apis.src_cal.add_event("a@old.org", "a@old.org", {
         "summary": "ZEBRA7731", "description": "ZEBRA7731",
         "attendees": [{"email": "guest@corr.example", "displayName": "ZEBRA7731"}]})
+    meta = {"source": {"type": "CONTACT", "id": "x"}}
+    apis.src_people.add_contact("a@old.org", {
+        "names": [{"givenName": "ZEBRA7731", "metadata": meta}],
+        "emailAddresses": [{"value": "zebra7731@corr.example", "metadata": meta}],
+        "phoneNumbers": [{"value": "+1 555 ZEBRA7731", "metadata": meta}],
+        "biographies": [{"value": "notes ZEBRA7731", "metadata": meta}],
+        "metadata": {"sources": [{"type": "CONTACT", "id": "x", "etag": "e"}]}})
     out, err, report = "", "", None
     for argv in (["check"], ["copy", "--batch", "b1"], ["status"], ["verify", "--batch", "b1"]):
         code, lines, cap = run(capfd, *argv, "--config", cfg)
@@ -26,6 +33,11 @@ def test_marker_never_leaks(env, capfd):
     assert MARKER not in out.lower() and MARKER not in err.lower()
     assert MARKER.encode() not in ledger.lower()
     assert MARKER not in report.lower()
+
+
+def test_contacts_were_copied_in_the_privacy_run(env, capfd):
+    _run_all(env, capfd)
+    assert len(env[0].dst_people.contacts["a@new.org"]) == 1  # so the marker test above covered a real copy
 
 
 def test_report_shows_user_addresses_but_no_correspondents(env, capfd):

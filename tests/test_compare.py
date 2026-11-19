@@ -2,7 +2,8 @@ import pytest
 from fakes import make_apis
 
 from movingday.calendar_copy import copy_calendars
-from movingday.compare import InventoryError, compare_calendar, compare_inventory, compare_mail, load_inventory
+from movingday.contacts import copy_contacts
+from movingday.compare import InventoryError, compare_calendar, compare_contacts, compare_inventory, compare_mail, load_inventory
 from movingday.ledger import Ledger
 from movingday.mail import copy_mail
 from movingday.mapping import Mapping, User
@@ -282,3 +283,91 @@ def test_compare_calendar_does_not_claim_and_later_copy_still_can(cal):
     assert len(a.dst_cal.cals[PD]) == 2
     assert led.calendar_claimant(G) == "u002"
     assert cmp_cal(a, led).calendars_src == 1  # claimed by someone else: no longer ours
+
+
+def _person(name, groups=()):
+    meta = {"source": {"type": "CONTACT", "id": "x"}}
+    return {"names": [{"givenName": name, "metadata": meta}],
+            "memberships": [{"contactGroupMembership": {"contactGroupResourceName": g}} for g in groups],
+            "metadata": {"sources": [{"type": "CONTACT", "id": "x", "etag": "e"}]}}
+
+
+@pytest.fixture
+def con(env):
+    a, led = env
+    g = a.src_people.add_group(S, "Team")
+    for n in range(3):
+        a.src_people.add_contact(S, _person(f"n{n}", [g] if n < 2 else []))
+    return a, led
+
+
+def cmp_con(a, led):
+    return compare_contacts(a.src_people, a.dst_people, led, U, S, D)
+
+
+def test_contacts_match_after_copy(con):
+    a, led = con
+    copy_contacts(a.src_people, a.dst_people, led, U, S, D)
+    r = cmp_con(a, led)
+    assert (r.contacts_src, r.contacts_dst, r.contacts_missing) == (3, 3, 0)
+    assert (r.labels_src, r.labels_dst, r.label_member_mismatches) == (1, 1, 0)
+
+
+def test_contact_never_copied_or_deleted_on_destination_is_missing(con):
+    a, led = con
+    assert cmp_con(a, led).contacts_missing == 3  # nothing copied yet
+    copy_contacts(a.src_people, a.dst_people, led, U, S, D)
+    a.dst_people.contacts[D].popitem()
+    assert cmp_con(a, led).contacts_missing == 1
+
+
+def test_contact_row_not_done_is_missing_and_gone_row_is_not_expected(con):
+    a, led = con
+    copy_contacts(a.src_people, a.dst_people, led, U, S, D)
+    sid, (did, etag, _) = next(iter(led.contact_rows(U).items()))
+    led.set_contact(U, sid, did, etag, "failed", "http_500")
+    assert cmp_con(a, led).contacts_missing == 1
+    del a.src_people.contacts[S][sid]  # removed on source: no longer listed, so not expected
+    assert cmp_con(a, led).contacts_missing == 0
+
+
+def test_extra_destination_contact_does_not_hide_a_missing_one(con):
+    a, led = con
+    copy_contacts(a.src_people, a.dst_people, led, U, S, D)
+    a.dst_people.contacts[D].popitem()
+    a.dst_people.add_contact(D, _person("extra"))
+    r = cmp_con(a, led)
+    assert (r.contacts_dst, r.contacts_missing) == (3, 1)
+
+
+def test_label_missing_or_with_fewer_members_is_a_mismatch(con):
+    a, led = con
+    copy_contacts(a.src_people, a.dst_people, led, U, S, D)
+    (res,) = a.dst_people.groups[D]
+    for c in list(a.dst_people.contacts[D].values())[:1]:
+        c["memberships"] = []
+    assert cmp_con(a, led).label_member_mismatches == 1
+    a.dst_people.groups[D].clear()
+    r = cmp_con(a, led)
+    assert (r.labels_src, r.labels_dst, r.label_member_mismatches) == (1, 0, 1)
+
+
+def test_label_matched_by_name_ignoring_case_and_extra_members_ok(con):
+    a, led = con
+    copy_contacts(a.src_people, a.dst_people, led, U, S, D)
+    (res,) = a.dst_people.groups[D]
+    a.dst_people.groups[D][res] = "TEAM"
+    a.dst_people.add_contact(D, _person("more", [res]))
+    assert cmp_con(a, led).label_member_mismatches == 0
+
+
+def test_no_contacts_all_zero(env):
+    a, led = env
+    r = cmp_con(a, led)
+    assert (r.contacts_src, r.contacts_dst, r.contacts_missing, r.labels_src, r.label_member_mismatches) == (0,) * 5
+
+
+def test_compare_contacts_only_reads(con):
+    a, led = con
+    cmp_con(a, led)
+    assert {c[0] for c in a.src_people.calls + a.dst_people.calls} <= {"list_contacts", "list_groups"}

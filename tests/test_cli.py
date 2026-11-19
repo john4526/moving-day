@@ -46,7 +46,8 @@ def test_check_reports_sizes_per_user_key(env, capsys):
     code, out, _ = run(capsys, "check", "--config", cfg)
     assert code == 0 and out[0]["ok"] is True
     assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "own_calendars": 0, "delegated_calendars": 0,
-                                  "team_calendars": 0, "dst_existing": 0, "ok": True}
+                                  "team_calendars": 0, "contacts": 0, "other_contacts": 0, "dst_existing": 0,
+                                  "ok": True}
     assert [u["user"] for u in out[0]["users"]] == ["u001", "u002", "u003"]
 
 
@@ -74,7 +75,8 @@ def test_check_classifies_calendars_and_summarises(env, capsys):
     assert (u["u002"]["own_calendars"], u["u002"]["delegated_calendars"], u["u002"]["team_calendars"]) == (2, 0, 1)
     assert (u["u003"]["own_calendars"], u["u003"]["delegated_calendars"], u["u003"]["team_calendars"]) == (0, 0, 0)
     assert out[0]["summary"] == {"users": 3, "total_messages": 6, "largest_mailbox": 2,
-                                 "accounts_with_delegated": 1, "accounts_with_team_calendars": 2, "failed": 0}
+                                 "accounts_with_delegated": 1, "accounts_with_team_calendars": 2, "total_contacts": 0,
+                                 "failed": 0}
     assert "@" not in cap.out
 
 
@@ -83,9 +85,31 @@ def test_check_source_only_never_touches_destination(env, capsys):
     code, out, _ = run(capsys, "check", "--source-only", "--config", cfg)
     assert code == 0 and apis.get_apis_calls == [True]
     assert out[0]["users"][0] == {"user": "u001", "src_messages": 2, "own_calendars": 0,
-                                  "delegated_calendars": 0, "team_calendars": 0, "ok": True}
-    assert apis.dst_gmail.calls == [] and apis.dst_cal.calls == []
+                                  "delegated_calendars": 0, "team_calendars": 0, "contacts": 0,
+                                  "other_contacts": 0, "ok": True}
+    assert apis.dst_gmail.calls == [] and apis.dst_cal.calls == [] and apis.dst_people.calls == []
     assert {c[0] for c in apis.src_gmail.calls + apis.src_cal.calls} == {"profile", "list_calendars"}
+    assert {c[0] for c in apis.src_people.calls} == {"list_contacts", "count_other_contacts"}
+
+
+def test_check_counts_contacts_and_other_contacts(env, capsys):
+    apis, cfg, _ = env
+    for n in range(3):
+        apis.src_people.add_contact("a@old.org", {"names": [{"givenName": f"n{n}"}]})
+    apis.src_people.add_contact("b@old.org", {"names": [{"givenName": "x"}]})
+    apis.src_people.set_other_contacts("a@old.org", 7)
+    code, out, cap = run(capsys, "check", "--source-only", "--config", cfg)
+    u = {x["user"]: x for x in out[0]["users"]}
+    assert code == 0 and (u["u001"]["contacts"], u["u001"]["other_contacts"]) == (3, 7)
+    assert (u["u002"]["contacts"], u["u002"]["other_contacts"]) == (1, 0)
+    assert out[0]["summary"]["total_contacts"] == 4
+
+
+def test_check_contacts_failure_marks_user_failed(env, capsys):
+    apis, cfg, _ = env
+    apis.src_people.fail_next("list_contacts", ApiError("http_403", False))
+    code, out, _ = run(capsys, "check", "--source-only", "--config", cfg)
+    assert code == 1 and out[0]["users"][0] == {"user": "u001", "ok": False, "reason": "http_403"}
 
 
 def test_check_failures_count_in_summary(env, capsys):
@@ -140,6 +164,46 @@ def test_copy_mail_only_skips_calendars(env, capsys):
     code, out, _ = run(capsys, "copy", "--batch", "b2", "--mail", "--config", cfg)
     assert code == 0 and "calendars" not in out[0]["users"][0]
     assert not [c for c in apis.src_cal.calls if c[0] == "list_calendars"]
+
+
+def _contact(apis, user="a@old.org", name="n"):
+    apis.src_people.add_contact(user, {"names": [{"givenName": name, "metadata": {"source": {"type": "CONTACT"}}}]})
+
+
+def test_copy_default_includes_contacts_and_merges_stats(env, capsys):
+    apis, cfg, _ = env
+    _contact(apis)
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    u = out[0]["users"][0]
+    assert code == 0 and u["copied"] == 2 and u["contacts_found"] == 1 and u["contacts_copied"] == 1
+    assert (u["contacts_updated"], u["contacts_failed"], u["labels_created"], u["removed_on_source"]) == (0, 0, 0, 0)
+    assert len(apis.dst_people.contacts["a@new.org"]) == 1
+
+
+def test_copy_contacts_only_skips_mail_and_calendars(env, capsys):
+    apis, cfg, _ = env
+    _contact(apis)
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--contacts", "--config", cfg)
+    assert code == 0 and "copied" not in out[0]["users"][0] and out[0]["users"][0]["contacts_copied"] == 1
+    assert not [c for c in apis.src_cal.calls if c[0] == "list_calendars"]
+    assert apis.dst_gmail.messages == {} or not apis.dst_gmail.messages.get("a@new.org")
+
+
+def test_copy_mail_flag_alone_skips_contacts(env, capsys):
+    apis, cfg, _ = env
+    code, out, _ = run(capsys, "copy", "--batch", "b2", "--mail", "--config", cfg)
+    assert code == 0 and "contacts_copied" not in out[0]["users"][0] and apis.src_people.calls == []
+
+
+def test_failed_contact_makes_copy_not_ok(env, capsys):
+    apis, cfg, _ = env
+    _contact(apis)
+    apis.dst_people.fail_next("create_contact", ApiError("http_500", False))
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--contacts", "--config", cfg)
+    u = out[0]["users"][0]
+    assert code == 1 and u["ok"] is False and u["contacts_failed"] == 1
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--contacts", "--allow-existing", "u001", "--config", cfg)
+    assert code == 0 and out[0]["users"][0]["contacts_copied"] == 1  # the failed row is retried
 
 
 def test_copy_refuses_when_destination_not_empty(env, capsys):

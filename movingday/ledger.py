@@ -113,7 +113,7 @@ class Ledger:
 
     def failures(self, user_key):
         out: dict[str, int] = {}
-        for table in ("messages", "events"):
+        for table in ("messages", "events", "contacts"):
             for reason, n in self._r(
                     f"SELECT COALESCE(reason,'unknown'), COUNT(*) FROM {table} "
                     "WHERE user_key=? AND state='failed' GROUP BY 1", (user_key,)):

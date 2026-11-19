@@ -10,7 +10,7 @@ from dataclasses import asdict
 
 import pytest
 
-from movingday import calendar_copy, mail, runtime, validation
+from movingday import calendar_copy, contacts, mail, runtime, validation
 from movingday.config import UntrustedFile, load_config
 from movingday.ledger import Ledger
 from movingday.mapping import MappingError, load_mapping
@@ -38,12 +38,13 @@ def _parser():
         if name == "copy":
             s.add_argument("--mail", action="store_true")
             s.add_argument("--calendar", action="store_true")
+            s.add_argument("--contacts", action="store_true")
             s.add_argument("--allow-existing", nargs="+", default=[], metavar="KEY")
     return p
 
 
 def _scan_user(apis, u, source_only):
-    """Read-only: profile and calendar list. Returns the entry and the group calendars this user owns."""
+    """Read-only: profile, calendar list and contact counts. Returns the entry and the group calendars this user owns."""
     # classification must stay in step with calendar_copy.select_calendars
     e = {"user": u.key, "src_messages": apis.src_gmail.profile(u.source)["messagesTotal"]}
     own = delegated = 0
@@ -57,7 +58,9 @@ def _scan_user(apis, u, source_only):
                 groups.add(cal["id"])
             elif not cal["id"].endswith(calendar_copy.RESOURCE_SUFFIX):
                 delegated += 1
-    e.update(own_calendars=own, delegated_calendars=delegated)
+    e.update(own_calendars=own, delegated_calendars=delegated,
+             contacts=len(apis.src_people.list_contacts(u.source)),
+             other_contacts=apis.src_people.count_other_contacts(u.source))
     if not source_only:
         e["dst_existing"] = apis.dst_gmail.profile(u.destination)["messagesTotal"]
     return e, groups
@@ -82,12 +85,13 @@ def _check(config, users, source_only=False):
                "largest_mailbox": max((e["src_messages"] for e in good), default=0),
                "accounts_with_delegated": sum(e["delegated_calendars"] > 0 for e in good),
                "accounts_with_team_calendars": sum(e["team_calendars"] > 0 for e in good),
+               "total_contacts": sum(e["contacts"] for e in good),
                "failed": len(out) - len(good)}
     emit({"command": "check", "ok": not summary["failed"], "users": out, "summary": summary})
     return 1 if summary["failed"] else 0
 
 
-def _copy_user(config, u, do_mail, do_cal, mapping):
+def _copy_user(config, u, do_mail, do_cal, do_contacts, mapping):
     try:
         ledger = Ledger(config.ledger_path)
         try:
@@ -100,6 +104,11 @@ def _copy_user(config, u, do_mail, do_cal, mapping):
                 e.update(asdict(calendar_copy.copy_calendars(
                     apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination,
                     config.dest_domain)))
+            if do_contacts:
+                c = asdict(contacts.copy_contacts(
+                    apis.src_people, apis.dst_people, ledger, u.key, u.source, u.destination))
+                c["contacts_found"] = c.pop("found")  # mail already uses "found"
+                e.update(c)
             # unsupported event types are retried every run; they are not failures (R5)
             e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"}
             return e
@@ -131,11 +140,11 @@ def _copy(config, mapping, a):
         if refused:
             emit({"command": "copy", "ok": False, "reason": "destination_not_empty", "users": refused})
             return 2
-        both = not (a.mail or a.calendar)
+        both = not (a.mail or a.calendar or a.contacts)
         t0 = time.monotonic()
         with ThreadPoolExecutor(max_workers=config.parallel_users) as pool:
             results = list(pool.map(
-                lambda u: _copy_user(config, u, a.mail or both, a.calendar or both, mapping), users))
+                lambda u: _copy_user(config, u, a.mail or both, a.calendar or both, a.contacts or both, mapping), users))
         bad = any(not r["ok"] for r in results)
         emit({"command": "copy", "ok": not bad, "batch": a.batch, "users": results,
               "seconds": round(time.monotonic() - t0)})

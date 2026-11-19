@@ -181,3 +181,12 @@ def test_contact_and_group_rows_roundtrip(tmp_path):
     led.set_group("u001", "contactGroups/a", "contactGroups/b")
     assert led.group_map("u001") == {"contactGroups/a": "contactGroups/b"}
     assert led.group_map("u002") == {}
+
+
+def test_failures_include_failed_contacts_not_gone(tmp_path):
+    led = make(tmp_path)
+    led.set_contact("u001", "people/c1", "", "e1", "failed", "http_400")
+    led.set_contact("u001", "people/c2", "", "e2", "gone")
+    led.set_contact("u001", "people/c3", "people/d3", "e3", "done")
+    led.set_contact("u002", "people/c4", "", "e4", "failed", "http_500")
+    assert led.failures("u001") == {"http_400": 1}

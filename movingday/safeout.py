@@ -8,7 +8,8 @@ ALLOWED_KEYS = frozenset(
     "src_messages dst_existing calendars events_copied events_updated events_removed "
     "events_failed acl_copied outside_shares no_date_header threads_src threads_dst "
     "users own_calendars delegated_calendars team_calendars summary total_messages largest_mailbox "
-    "accounts_with_delegated accounts_with_team_calendars passed failed_checks checks name failures report seconds".split()
+    "accounts_with_delegated accounts_with_team_calendars contacts other_contacts total_contacts contacts_found "
+    "contacts_copied contacts_updated contacts_failed labels_created removed_on_source passed failed_checks checks name failures report seconds".split()
 )
 _SAFE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
 

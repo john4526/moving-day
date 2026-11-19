@@ -100,6 +100,29 @@ def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user, de
     return r
 
 
+@dataclass
+class ContactResult:
+    contacts_src: int
+    contacts_dst: int
+    contacts_missing: int
+    labels_src: int
+    labels_dst: int
+    label_member_mismatches: int
+
+
+def compare_contacts(src, dst, ledger, user_key, src_user, dst_user) -> ContactResult:
+    contacts = src.list_contacts(src_user)
+    dst_contacts = {c["resourceName"] for c in dst.list_contacts(dst_user)}
+    rows = ledger.contact_rows(user_key)
+    missing = sum(rows.get(c["resourceName"], ("", "", ""))[2] != "done"
+                  or rows[c["resourceName"]][0] not in dst_contacts for c in contacts)
+    user = "USER_CONTACT_GROUP"
+    have = {g["name"].lower(): g["memberCount"] for g in dst.list_groups(dst_user) if g["groupType"] == user}
+    wanted = {g["name"].lower(): g["memberCount"] for g in src.list_groups(src_user) if g["groupType"] == user}
+    return ContactResult(len(contacts), len(dst_contacts), missing, len(wanted),
+                         sum(k in have for k in wanted), sum(have.get(k, -1) < n for k, n in wanted.items()))
+
+
 class InventoryError(Exception):
     def __init__(self, reason: str, row: int):
         super().__init__(f"{reason} (row {row})")
