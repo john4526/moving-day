@@ -22,10 +22,10 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser():
-    p = _Parser(prog="wsmigrate")
+    p = _Parser(prog="wsmigrate", add_help=False)
     sub = p.add_subparsers(dest="command", required=True)
     for name in ("check", "copy", "status"):
-        s = sub.add_parser(name)
+        s = sub.add_parser(name, add_help=False)
         s.add_argument("--config", default=os.environ.get("WSMIGRATE_CONFIG"))
         if name != "check":
             s.add_argument("--batch", required=name == "copy")
@@ -65,7 +65,8 @@ def _copy_user(config, u, do_mail, do_cal, mapping):
             if do_cal:
                 e.update(asdict(calendar_copy.copy_calendars(
                     apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination)))
-            e["ok"] = not (e.get("failed") or e.get("events_failed"))
+            # unsupported event types are retried every run; they are not failures (R5)
+            e["ok"] = set(ledger.failures(u.key)) <= {"unsupported_event_type"}
             return e
         finally:
             ledger.close()
@@ -124,8 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     warnings.simplefilter("ignore")
     try:
         a = _parser().parse_args(argv)
-    except SystemExit as e:  # --help exits 0; bad arguments were already emitted
-        return e.code if isinstance(e.code, int) else 2
+    except SystemExit:  # bad arguments were already emitted
+        return 2
     name = a.command
     try:
         if not a.config:
@@ -143,6 +144,9 @@ def main(argv: list[str] | None = None) -> int:
         if name == "status":
             return _status(config, users)
         return _copy(config, mapping, a)
+    except KeyboardInterrupt:
+        emit({"command": name, "ok": False, "reason": "interrupted"})
+        return 1
     except Exception as exc:
         emit({"command": name, "ok": False, "reason": reason_for(exc)})
         return 1

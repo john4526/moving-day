@@ -4,6 +4,7 @@ import json
 import pytest
 from fakes import make_apis
 
+from wsmigrate.api import ApiError
 from wsmigrate import cli, mail, runtime
 
 RAW = b"Subject: s\r\nMessage-ID: <a@x>\r\nDate: Mon, 1 Jan 2026 00:00:00 +0000\r\n\r\nb\r\n"
@@ -126,6 +127,52 @@ def test_unexpected_error_emits_reason_only(env, capsys, monkeypatch):
     assert out[0]["users"][0] == {"user": "u001", "ok": False, "reason": "internal_RuntimeError"}
 
 
+def test_one_user_failing_leaves_others_ok(env, capsys, monkeypatch):
+    apis, cfg, _ = env
+    real = mail.copy_mail
+
+    def sometimes(src, dst, ledger, key, su, du):
+        if key == "u001":
+            raise RuntimeError("SECRET")
+        return real(src, dst, ledger, key, su, du)
+    monkeypatch.setattr(mail, "copy_mail", sometimes)
+    code, out, cap = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 1 and "SECRET" not in cap.out + cap.err
+    by = {u["user"]: u for u in out[0]["users"]}
+    assert by["u001"]["ok"] is False and by["u002"]["ok"] is True
+
+
+def test_unsupported_event_type_is_not_a_failure(env, capsys):
+    apis, cfg, _ = env
+    apis.src_cal.add_calendar("c@old.org", "c@old.org", primary=True)
+    apis.dst_cal.add_calendar("c@new.org", "c@new.org", primary=True)
+    apis.src_cal.add_event("c@old.org", "c@old.org", {"summary": "x", "eventType": "focusTime"})
+    apis.dst_cal.fail_next("import_event", ApiError("http_400", False))
+    code, out, _ = run(capsys, "copy", "--batch", "b2", "--config", cfg)
+    assert code == 0 and out[0]["users"][0]["ok"] is True and out[0]["users"][0]["events_failed"] == 1
+
+
+def test_real_mail_failure_is_not_ok(env, capsys):
+    apis, cfg, _ = env
+    apis.dst_gmail.fail_next("insert", ApiError("http_500", False))
+    code, out, _ = run(capsys, "copy", "--batch", "b2", "--config", cfg)
+    assert code == 1 and out[0]["users"][0]["ok"] is False and out[0]["users"][0]["failed"] == 1
+
+
+def test_rerun_of_same_batch_is_not_refused(env, capsys):
+    apis, cfg, tmp = env  # max_existing=1, each user copies 2 messages
+    assert run(capsys, "copy", "--batch", "b1", "--config", cfg)[0] == 0
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 0 and out[0]["ok"] is True
+
+
+def test_keyboard_interrupt_emits_interrupted(env, capsys, monkeypatch):
+    _, cfg, _ = env
+    monkeypatch.setattr(runtime, "get_apis", lambda c: (_ for _ in ()).throw(KeyboardInterrupt()))
+    code, out, cap = run(capsys, "check", "--config", cfg)
+    assert code == 1 and out[0]["reason"] == "interrupted" and cap.err == ""
+
+
 def test_top_level_error_emits_reason(env, capsys, monkeypatch):
     _, cfg, _ = env
     monkeypatch.setattr(runtime, "get_apis", lambda c: (_ for _ in ()).throw(ValueError("SECRET")))
@@ -138,8 +185,9 @@ def test_no_config_and_bad_arguments(env, capsys, monkeypatch):
     monkeypatch.delenv("WSMIGRATE_CONFIG", raising=False)
     code, out, _ = run(capsys, "check")
     assert code == 2 and out[0]["reason"] == "no_config"
-    code, out, cap = run(capsys, "copy", "--bogus")
-    assert code == 2 and out == [{"ok": False, "reason": "bad_arguments"}] and cap.err == ""
+    for argv in (["copy", "--bogus"], ["--help"], ["copy", "-h"]):
+        code, out, cap = run(capsys, *argv)
+        assert code == 2 and out == [{"ok": False, "reason": "bad_arguments"}] and cap.err == ""
 
 
 def test_config_from_environment(env, capsys, monkeypatch):
