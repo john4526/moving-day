@@ -20,3 +20,4 @@ reports/
 # Planning material kept local
 *.pdf
 .DS_Store
+.superpowers/

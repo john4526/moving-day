@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wsmigrate"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client",
+    "google-auth",
+    "pytest",
+    "pytest-html",
+]
+
+[project.scripts]
+wsmigrate = "wsmigrate.cli:main"
+
+[tool.setuptools]
+packages = ["wsmigrate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
