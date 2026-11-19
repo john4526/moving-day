@@ -55,21 +55,23 @@ def pytest_html_results_table_row(report, cells):
                   for c in _COLUMNS]
 
 
+def pytest_collection_modifyitems(items):
+    """Condition (the docstring) and any data-independent expected value, known before any fixture runs."""
+    for item in items:
+        expected = getattr(item.module, "EXPECTED", {}).get(item.originalname, "\u2014")
+        item.user_properties += [("condition", " ".join(item.function.__doc__.split())), ("expected", expected)]
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Any error (in a check or a fixture) is reported as its reason only, never its exception text."""
+    """No captured output in the report; any error (check, fixture or teardown) shows its reason only."""
     report = yield
+    report.sections = []  # pytest-html shows captured stdout/stderr/log whatever --show-capture says
     exc = call.excinfo.value if call.excinfo else None
-    if report.failed and isinstance(exc, Exception) and not isinstance(exc, AssertionError):
+    if report.failed and isinstance(exc, Exception) and not (isinstance(exc, AssertionError) and call.when == "call"):
         report.longrepr = f"error: {reason_for(exc)}"
         report.user_properties = [*report.user_properties, ("actual", report.longrepr)]
     return report
-
-
-@pytest.fixture(autouse=True)
-def _condition(request, record_property):
-    """Each check's docstring is its plain-English condition, recorded before any fixture can fail."""
-    record_property("condition", " ".join(request.function.__doc__.split()))
 
 
 @pytest.fixture(scope="session")

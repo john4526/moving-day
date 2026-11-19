@@ -48,3 +48,23 @@ def test_api_error_text_never_reaches_report(env, capfd):
     assert code == 1 and MARKER not in (text + cap.out + cap.err).lower() and "corr.example" not in text
     row = rows["test_validation.py::test_mail_none_missing[u001]"]
     assert row[0] == "Error" and row[4].endswith("::setup") and row[3] == "error: http_403"
+
+
+def test_captured_output_and_logs_never_reach_report(env, capfd, monkeypatch):
+    import logging
+    import sys
+    apis, cfg, tmp = env
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    real = apis.dst_gmail.list_messages
+
+    def noisy(user):
+        sys.stderr.write("ZEBRA7731 stderr\n")
+        sys.stdout.write("ZEBRA7731 stdout\n")
+        logging.getLogger("googleapiclient.http").warning("Invalid JSON content from response: %s", "ZEBRA7731")
+        return real(user)
+    monkeypatch.setattr(apis.dst_gmail, "list_messages", noisy)
+    apis.dst_gmail.messages["a@new.org"].popitem()  # a failing row too, whose log pytest-html would show
+    code, out, cap = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    text = html.unescape((tmp / "r" / out[0]["report"]).read_text())
+    assert code == 1 and len(out) == 1 and cap.err == "" and len(cap.out.splitlines()) == 1
+    assert MARKER not in (text + cap.out).lower()

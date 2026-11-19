@@ -126,13 +126,14 @@ def _status(config, users):
 
 
 class _Recorder:
-    """pytest plugin: one check per test, ok unless any phase failed (an xfail counts as ok)."""
+    """pytest plugin: one check per test, ok unless any phase failed or was skipped (an xfail counts as ok)."""
 
     def __init__(self):
         self.ok = {}
 
     def pytest_runtest_logreport(self, report):
-        self.ok[report.nodeid] = self.ok.get(report.nodeid, True) and not report.failed
+        bad = report.failed or (report.skipped and not hasattr(report, "wasxfail"))
+        self.ok[report.nodeid] = self.ok.get(report.nodeid, True) and not bad
 
 
 def _verify(config, a):
@@ -141,7 +142,7 @@ def _verify(config, a):
     rec = _Recorder()
     args = [here, "-c", os.devnull, "--rootdir", here, "--batch", a.batch, "--config", a.config,
             "--html", os.path.abspath(os.path.join(config.report_dir, name)), "--self-contained-html",
-            "--tb=short", "--show-capture=no", "-p", "no:cacheprovider", "-p", "no:logging",
+            "--tb=short", "--show-capture=no", "-s", "-p", "no:cacheprovider", "-p", "no:logging",
             "-p", "no:faulthandler"] + (["--expect-changes"] if a.expect_changes else [])
     # pytest writes at the fd level, so silence fds 1 and 2, not just sys.stdout/stderr
     sys.stdout.flush(); sys.stderr.flush()
@@ -161,8 +162,11 @@ def _verify(config, a):
         checks.append({"name": test, **({"user": user} if user else {}), "ok": ok})
     failed = sum(not c["ok"] for c in checks)
     passed = ret == 0 and failed == 0
-    emit({"command": "verify", "batch": a.batch, "passed": passed, "failed_checks": failed,
-          "checks": checks, "report": name})
+    out = {"command": "verify", "batch": a.batch, "passed": passed, "failed_checks": failed,
+           "checks": checks, "report": name}
+    if ret != 0 and not failed:
+        out["reason"] = f"pytest_exit_{int(ret)}"
+    emit(out)
     return 0 if passed else 1
 
 

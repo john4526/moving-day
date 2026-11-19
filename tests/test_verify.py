@@ -146,3 +146,46 @@ def test_report_shows_condition_expected_and_actual(env, capfd):
     assert counts[2].splitlines() == ["calendars: 1 (same as source)", "events: 1 (same as source)",
                                       "recurring series: 0 (same as source)", "attendees: 1 (same as source)"]
     assert counts[3].splitlines() == ["calendars: 1", "events: 1", "recurring series: 0", "attendees: 1"]
+
+
+class _Denied(Exception):
+    reason = "http_403"
+
+
+def test_session_fixture_failure_keeps_condition_on_every_row(env, capfd, monkeypatch):
+    _, cfg, tmp = env
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    monkeypatch.setattr(runtime, "get_apis", lambda c: (_ for _ in ()).throw(_Denied("x")))
+    code, out, cap = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1 and len(out) == 1 and cap.err == ""
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    assert len(rows) == 20 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
+    uses_apis = [t for t in rows if "_mail_" in t or "_calendar_" in t or "inventory" in t]
+    assert len(uses_apis) == 15 and all(rows[t][3] == "error: http_403" for t in uses_apis)
+    assert rows["test_validation.py::test_mail_none_missing[u001]"][2] == "0 missing"  # static expected
+    assert rows["test_validation.py::test_calendar_counts[u001]"][2] == "—"  # data-dependent: unknown
+
+
+def test_freeze_fails_when_no_copy_recorded(env, capfd):
+    _, cfg, tmp = env
+    code, out, _ = run(capfd, "verify", "--batch", "b2", "--expect-changes", "--config", cfg)
+    assert code == 1 and [c for c in out[0]["checks"] if not c["ok"]] == [
+        {"name": "test_freeze_held", "user": "u003", "ok": False}]
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    assert rows["test_validation.py::test_freeze_held[u003]"][3] == "no copy recorded"
+
+
+def test_nonzero_pytest_exit_without_failed_check_gives_reason(env, capfd, monkeypatch):
+    _, cfg, _ = env
+    monkeypatch.setattr(pytest, "main", lambda *a, **k: 3)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1 and out[0]["passed"] is False and out[0]["failed_checks"] == 0
+    assert out[0]["reason"] == "pytest_exit_3"
+
+
+def test_plain_skip_is_not_ok_but_xfail_is():
+    from types import SimpleNamespace as R
+    rec = cli._Recorder()
+    rec.pytest_runtest_logreport(R(nodeid="a", failed=False, skipped=True))
+    rec.pytest_runtest_logreport(R(nodeid="b", failed=False, skipped=True, wasxfail="changes expected"))
+    assert rec.ok == {"a": False, "b": True}
