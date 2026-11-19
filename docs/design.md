@@ -1,0 +1,253 @@
+# Migration utility: design (draft for approval)
+
+Date: 18 November 2026. Status: draft, not approved. Nothing is built yet.
+
+## Intent
+
+Copy mail and calendars for about 70 users from the source Google Workspace
+account to the destination account, without paying a per-user migration
+licence and without a third party handling stored data. An AI agent operates
+the tool; people approve the irreversible steps. A test suite with HTML
+reports is the evidence for sign-off.
+
+The $747 mail queuing service is still bought. It covers new inbound mail
+during the cutover weekend and is outside this tool.
+
+## Goals
+
+- Copy every in-scope message, with its labels, read state, dates and threads.
+- Copy every in-scope calendar: events, recurring series, attendees, and
+  sharing settings.
+- Safe to re-run: a second run copies only what is new (this is the final
+  sync after cutover) and never creates duplicates.
+- Resumable: an interrupted run continues where it stopped.
+- The agent never sees mail or calendar content.
+- A per-user HTML validation report a non-technical approver can read.
+
+## Non-goals
+
+- Drive files, shared drives, contacts (decided: mail and calendar only).
+- Creating users, groups and aliases (done by hand in the Admin console; the
+  test suite checks they exist).
+- Gmail settings: filters, signatures, forwarding, send-as. Users redo these.
+  *My call; say if signatures or filters must move.*
+- Spam, Trash, Chat history and unsent drafts are not copied, and are left
+  out of the count checks. *My call; users are told to send or save drafts
+  elsewhere before cutover.*
+- DNS changes, releasing or claiming the domain, mail routing.
+
+## Anti-goals (failure even if it "works")
+
+- One person's mail landing in another person's mailbox.
+- Message or event content appearing in agent output, logs or reports.
+- The tool deleting or changing anything in the source account.
+- Invitations or notifications being re-sent to attendees during the copy.
+
+## Constraints
+
+- The parent organisation controls the source account. Access there needs
+  their super administrator to grant domain-wide delegation to a service
+  account. **That grant cannot be limited to our users: technically it can
+  read every mailbox in the parent's account.** See Open questions.
+- The destination users sit on a temporary domain until cutover. After
+  cutover the source users are renamed. The tool therefore tracks users by
+  Google's permanent user ID, not by email address.
+- Budget: $0 tool licences. Small running cost if a cloud machine is used.
+
+## Approaches considered
+
+- **A. Google's free tool for mail, a script for calendars.** Least code and
+  least access. Rejected because Google's tool is operated by hand in the
+  Admin console and an agent cannot drive it.
+- **B. One self-built tool for mail and calendars (chosen).** An agent can
+  run it end to end, and no third party handles stored data. Costs: it needs
+  read access to message bodies, and more code to get right.
+- **C. Buy MigrationWiz, build only the tests.** Least effort, but $1,225 at
+  70 users (at the budget ceiling with queuing) and a third party processes
+  all stored data.
+
+## How it works
+
+Python command-line tool. Libraries: Google's API client and auth libraries,
+pytest, pytest-html. Progress is kept in a local SQLite file.
+
+### Access
+
+Two service accounts, one per Workspace account, each with the narrowest
+scopes that work:
+
+| Side | Scope | Used for |
+|---|---|---|
+| Source | Gmail read-only | read messages and labels |
+| Source | Calendar read-only | read calendars and events |
+| Source | Calendar sharing read-only | read sharing settings (exact scope to confirm in pilot; plain read-only may not allow it) |
+| Destination | Gmail insert | add messages (cannot read or delete) |
+| Destination | Gmail labels | create labels |
+| Destination | Gmail metadata | tests read headers only, never bodies |
+| Destination | Calendar | create calendars, events, sharing |
+| Destination | Directory read-only | inventory for tests |
+
+The tool does not read the source directory. *My call:* that would need a
+parent-organisation administrator identity. Instead their administrator
+exports a list of our users, groups, group members and aliases as a CSV
+(the inventory file), and the tests check the destination against it.
+
+The Gmail metadata scope lets the tool (not the agent) see headers,
+including subjects. It cannot search, so validation lists every message and
+fetches headers one by one; expect this to be slow.
+
+Keys live in files outside the project folder, readable only by the tool's
+user. They are deleted and the delegation revoked after sign-off.
+
+### Mapping file
+
+A CSV: source address, destination address, batch name. The tool resolves
+each to a permanent Google user ID on first run and stores it. Because
+access is granted by address, each later run takes the user's current
+address from an updated mapping file and checks it still resolves to the
+stored ID. The mapping file also defines which users are "ours". It refuses to
+run if any source or destination appears twice, or if a destination mailbox
+already holds mail it did not put there (unless explicitly overridden for
+that user).
+
+### Mail copy
+
+For each user: list source message IDs; skip those already in the ledger;
+for each remaining one, download the raw message into memory, insert it into
+the destination with the original date, labels and read/starred state, then
+record source ID, destination ID and a hash of the Message-ID header in the
+ledger. Content is never written to disk.
+
+- Labels are created on the destination first, including nested ones.
+- Dates: the destination date is taken from the message's own Date header.
+  Messages with a missing or wrong header will show a different date; these
+  are counted and reported.
+- Threads: each thread's first message is inserted first, and the ledger
+  maps source thread to destination thread. Gmail also requires matching
+  subject and reply headers, so some threads may split; splits are counted
+  and reported, not treated as failures.
+- Crash safety: the ledger row is written as "pending" before the insert
+  and "done" after. On resume, pending rows are checked against the
+  destination by Message-ID before retrying. The tool cannot delete, so any
+  duplicate that slips through is detected and reported by the tests.
+- Speed is not promised. Google's limits are measured in the pilot (expect
+  on the order of one message per second per mailbox) before any duration
+  is quoted.
+- Messages are inserted directly, not delivered, so nothing is re-scanned,
+  auto-forwarded or bounced.
+- Rate limits and transient errors: retry with backoff. Permanent failures
+  are recorded by ID and reason code and reported, not retried forever.
+- Several users run in parallel; one user's messages run in order.
+
+### Calendar copy
+
+For each user: create their secondary calendars on the destination; copy
+events using the import call, which keeps the event's identity and does not
+send invitations; copy sharing settings with notifications off, translating
+addresses through the mapping file. Re-runs use the ledger to update
+changed events and cancel deleted ones, with notifications off, rather than
+importing again.
+
+- Attendee and organiser addresses are left as they are, because the domain
+  itself moves. Sharing with people who are not in the mapping file
+  (for example parent-organisation staff) is kept as an outside address and
+  counted in the report. *My call.*
+- Special event types the import call may not accept (out-of-office, focus
+  time, working location) are attempted, and otherwise reported and left out
+  of the count checks.
+
+To be confirmed in the pilot, not assumed: Meet links, room bookings, and
+events where the user is a guest rather than the organiser.
+
+### Commands (what the agent runs)
+
+- `check` : validates the mapping file and access. No data moves.
+- `copy --batch NAME [--mail] [--calendar]` : copies; safe to re-run.
+- `status [--batch NAME]` : counts per user: found, copied, failed, remaining.
+- `verify --batch NAME` : runs the validation tests and writes the HTML report.
+
+Every command prints a small JSON summary. There is no delete command and no
+code path that modifies the source.
+
+### Privacy rules for an agent-run tool
+
+- Output and logs are built from an allow-list of fields: user key, counts,
+  IDs, status and reason codes. Subjects, bodies, addresses of
+  correspondents, event titles and attendee names are never printed.
+- Users appear in agent-facing output as short keys (u001, u002). The HTML
+  report for the human approver shows the real addresses.
+- Google error messages are reduced to their error code before printing.
+- The agent's instructions forbid opening the key files, the ledger or the
+  mapping file directly. *This is a rule, not a technical barrier, unless the
+  tool runs under a separate operating-system user. See Open questions.*
+
+### Steps only a person does
+
+Granting and revoking delegation; go/no-go; releasing and claiming the
+domain; DNS and mail routing; releasing the mail queue; sign-off; removing
+anything from the source.
+
+## Test suite
+
+pytest, with pytest-html producing one self-contained HTML file per run.
+
+**1. Logic tests (no network, run any time).** Against a fake Google API
+with made-up data:
+- mapping file: duplicates, missing users, malformed rows are rejected
+- re-running a copy creates no duplicates
+- an interrupted copy resumes and finishes
+- labels, nested labels, read and starred state carry over
+- threads stay grouped
+- recurring events, exceptions and all-day events carry over
+- sharing settings are translated through the mapping
+- rate-limit and server errors are retried; permanent errors are recorded
+- no invitation or notification option is ever switched on
+- the tool makes no delete or modify call against the source
+- **privacy:** a made-up message with a marker phrase in subject, body,
+  sender and event title is copied, and the test fails if the marker appears
+  anywhere in output, logs, the ledger or the HTML report
+
+**2. Pilot tests (two test accounts with seeded made-up data).** The same
+checks, against real Google accounts, plus the three calendar items listed
+above as unconfirmed.
+
+**3. Validation tests (the real migration, per user, per batch).**
+- message count on the destination matches the source, per label
+- every source Message-ID is present on the destination (compared as hashes)
+- no destination message came from a different user's source mailbox
+- calendar count, event count, recurring-series count and attendee counts match
+- sharing settings match after translation
+- every group, group member and alias in the inventory file exists on the
+  destination
+- no message appears twice on the destination
+- nothing is left in the failed list, or each failure is listed by reason
+
+The report shows pass/fail per user and per check, with counts only.
+
+## Left to the builder
+
+File layout, the fake API's design, parallelism level, backoff timings, and
+the report's styling.
+
+## Open questions (yours to answer)
+
+1. **Parent organisation access.** Will their super administrator grant
+   delegation that can technically read all their mailboxes? If not, the
+   fallback is that their administrator runs the source-reading half on
+   their own machine, or the project falls back to option C.
+2. **Which agent, and where does it run?** This decides whether the privacy
+   rules can be enforced technically (separate operating-system user for the
+   tool) or only by instruction. It also needs a machine that stays on for
+   the days the pre-copy takes.
+3. **What the final sync carries for mail.** Between pre-copy and cutover
+   users keep reading, filing and deleting. As designed, the final sync adds
+   new mail only: a message read or deleted in that window shows as unread
+   or reappears on the new account. Carrying those changes needs a much
+   broader destination permission (read and remove any message). Calendar
+   changes are carried either way.
+4. **Rehearsing the domain move.** Two pilot accounts cannot show what
+   happens to meetings when the organiser's address changes account. A
+   rehearsal needs a spare domain and two trial Workspace accounts;
+   otherwise this is first seen on cutover weekend.
+5. **Total mail volume.** Unknown. It sets how many days the pre-copy needs.
+   The `check` command can measure it once access exists.

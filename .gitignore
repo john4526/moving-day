@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Never commit: credentials, user lists, ledger, reports
+*.json
+!package.json
+*.pem
+*.key
+.env*
+*.csv
+*.sqlite*
+*.db
+reports/
+*.html
+
+# Planning material kept local
+*.pdf
+.DS_Store
