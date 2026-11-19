@@ -98,6 +98,8 @@ an item says "else", the fallback is named.
   profile-only fields (a contact shows only its own saved values).
 - [ ] Photos are not copied: a contact with a photo copies without it and
   without error.
+- [ ] `contactGroups.list` returns `memberCount` for user labels (the
+  contact-label check depends on it).
 - [ ] Contacts count on the destination equals the source after `copy`; the
   report's contact checks pass.
 
