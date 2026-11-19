@@ -213,6 +213,7 @@ class FakeDirectory(_Fake):
         return dict(self.aliases)
 
 
+SINGLETON_FIELDS = ("names", "biographies", "birthdays", "genders")
 SYSTEM_GROUPS = ["myContacts", "starred", "friends", "family", "coworkers", "chatBuddies", "all", "blocked"]
 
 
@@ -243,7 +244,10 @@ class FakePeople(_Fake):
             raise ApiError("http_404", False)
         return c
 
-    def _check_memberships(self, user, body):
+    def _check(self, user, body):
+        """As the real API: one value per singleton field, and memberships of groups the account has."""
+        if any(len(body.get(f, [])) > 1 for f in SINGLETON_FIELDS):
+            raise ApiError("http_400", False)
         known = {"contactGroups/" + g for g in SYSTEM_GROUPS} | set(self.groups.get(user, {}))
         if any(m["contactGroupMembership"]["contactGroupResourceName"] not in known
                for m in body.get("memberships", [])):
@@ -251,8 +255,7 @@ class FakePeople(_Fake):
 
     @api
     def list_contacts(self, user) -> list[dict]:
-        return [{**copy.deepcopy(c), "metadata": {"sources": [{"type": "CONTACT"}]}}
-                for c in self.contacts.get(user, {}).values()]
+        return [copy.deepcopy(c) for c in self.contacts.get(user, {}).values()]
 
     @api
     def count_other_contacts(self, user) -> int:
@@ -278,24 +281,28 @@ class FakePeople(_Fake):
 
     @api
     def create_contact(self, user, body) -> tuple[str, str]:
-        self._check_memberships(user, body)
+        self._check(user, body)
         res = self.add_contact(user, body)
         return res, self.contacts[user][res]["etag"]
 
     @api
-    def update_contact(self, user, resource, etag, body) -> str:
-        """The real API answers a stale etag with 400 FAILED_PRECONDITION (to confirm in rehearsal)."""
+    def update_contact(self, user, resource, body) -> str:
+        """The real API answers a missing metadata.sources with 400, and a stale metadata.sources etag with
+        400 failedPrecondition."""
         c = self._contact(user, resource)
-        if c["etag"] != etag:
+        sources = body.get("metadata", {}).get("sources")
+        if not sources or sources[0]["etag"] != c["etag"]:
             raise ApiError("http_400", False)
-        self._check_memberships(user, body)
+        self._check(user, body)
         new = self._id("etag")
-        self.contacts[user][resource] = {**copy.deepcopy(body), "resourceName": resource, "etag": new}
+        fields = {k: v for k, v in copy.deepcopy(body).items() if k not in ("etag", "metadata")}
+        self.contacts[user][resource] = {**fields, "resourceName": resource, "etag": new}
         return new
 
     @api
-    def get_etag(self, user, resource) -> str:
-        return self._contact(user, resource)["etag"]
+    def get_update_meta(self, user, resource) -> dict:
+        etag = self._contact(user, resource)["etag"]
+        return {"etag": etag, "metadata": {"sources": [{"type": "CONTACT", "id": resource[7:], "etag": etag}]}}
 
 
 def make_apis() -> Apis:

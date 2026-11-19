@@ -237,7 +237,8 @@ class People(_Google):
     def list_contacts(self, user) -> list[dict]:
         fields = ",".join(PERSON_FIELDS + ("metadata",))
         return self._all(lambda tok: self._svc(user).people().connections().list(
-            resourceName="people/me", personFields=fields, pageSize=1000, pageToken=tok), "connections")
+            resourceName="people/me", personFields=fields, sources=["READ_SOURCE_TYPE_CONTACT"], pageSize=1000,
+            pageToken=tok), "connections")
 
     def count_other_contacts(self, user) -> int:
         return len(self._all(lambda tok: self._svc(user).otherContacts().list(
@@ -262,16 +263,25 @@ class People(_Google):
         raise ApiError("http_409", False)
 
     def create_contact(self, user, body) -> tuple[str, str]:
+        # ponytail: with_retry can repeat a POST whose response was lost, creating a duplicate contact;
+        # compare reports it as extra.
         p = self._call(lambda: self._svc(user).people().createContact(body=body, personFields="metadata"))
         return p["resourceName"], p["etag"]
 
-    def update_contact(self, user, resource, etag, body) -> str:
+    def update_contact(self, user, resource, body) -> str:
+        """body must carry what get_update_meta returns (etag and metadata.sources)."""
         return self._call(lambda: self._svc(user).people().updateContact(
             resourceName=resource, updatePersonFields=",".join(PERSON_FIELDS), personFields="metadata",
-            body={**body, "etag": etag}))["etag"]
+            body=body))["etag"]
 
-    def get_etag(self, user, resource) -> str:
-        return self._call(lambda: self._svc(user).people().get(resourceName=resource, personFields="metadata"))["etag"]
+    def get_update_meta(self, user, resource) -> dict:
+        """{"etag", "metadata": {"sources": [CONTACT source]}}: updateContact answers 400 without
+        metadata.sources, and 400 failedPrecondition when that source's etag is stale."""
+        p = self._call(lambda: self._svc(user).people().get(resourceName=resource, personFields="metadata"))
+        src = next((x for x in p.get("metadata", {}).get("sources", []) if x.get("type") == "CONTACT"), None)
+        if src is None:
+            raise ApiError("no_contact_source", False)
+        return {"etag": p["etag"], "metadata": {"sources": [{k: src.get(k) for k in ("type", "id", "etag")}]}}
 
 
 class Directory(_Google):

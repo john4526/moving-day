@@ -174,19 +174,38 @@ def test_incomplete_read_maps_to_retryable_network_error():
     assert e.value.__cause__ is None and e.value.__suppress_context__
 
 
-def test_fake_people_etags_change_and_stale_etag_is_rejected():
+def test_fake_people_update_needs_fresh_metadata_sources():
     from fakes import FakePeople
 
     p = FakePeople()
     res = p.add_contact("a@x", {"names": [{"givenName": "A"}]})
-    etag = p.get_etag("a@x", res)
-    new = p.update_contact("a@x", res, etag, {"names": [{"givenName": "B"}]})
-    assert new != etag and p.get_etag("a@x", res) == new
-    with pytest.raises(ApiError) as e:
-        p.update_contact("a@x", res, etag, {"names": [{"givenName": "C"}]})
+    meta = p.get_update_meta("a@x", res)
+    [source] = meta["metadata"]["sources"]
+    assert source["type"] == "CONTACT" and source["etag"] == meta["etag"]
+    with pytest.raises(ApiError) as e:  # updateContact without metadata.sources is a 400
+        p.update_contact("a@x", res, {"names": [{"givenName": "B"}], "etag": meta["etag"]})
     assert (e.value.reason, e.value.retryable) == ("http_400", False)
+    new = p.update_contact("a@x", res, {"names": [{"givenName": "B"}], **meta})
+    assert new != meta["etag"] and p.get_update_meta("a@x", res)["etag"] == new
+    with pytest.raises(ApiError) as e:  # stale source etag: 400 failedPrecondition
+        p.update_contact("a@x", res, {"names": [{"givenName": "C"}], **meta})
+    assert e.value.reason == "http_400"
     [c] = p.list_contacts("a@x")
     assert c["resourceName"] == res and c["etag"] == new and c["names"] == [{"givenName": "B"}]
+    assert "metadata" not in c
+
+
+def test_fake_people_rejects_two_values_for_a_singleton_field():
+    from fakes import FakePeople
+
+    p = FakePeople()
+    two = {"names": [{"givenName": "A"}, {"givenName": "B"}]}
+    with pytest.raises(ApiError) as e:
+        p.create_contact("a@x", two)
+    assert e.value.reason == "http_400"
+    res, _ = p.create_contact("a@x", {"names": [{"givenName": "A"}], "emailAddresses": [{"value": "1"}, {"value": "2"}]})
+    with pytest.raises(ApiError):
+        p.update_contact("a@x", res, {**two, **p.get_update_meta("a@x", res)})
 
 
 def test_fake_people_groups_and_other_contacts():

@@ -6,6 +6,7 @@ from movingday.api import PERSON_FIELDS, ApiError
 
 MY_CONTACTS = "contactGroups/myContacts"
 KEPT_SYSTEM_GROUPS = (MY_CONTACTS, "contactGroups/starred")
+DROPPED_KEYS = {"metadata", "source", "formattedType", "canonicalForm", "displayName", "displayNameLastFirst"}
 
 
 @dataclass
@@ -37,8 +38,20 @@ def _groups(src, dst, ledger, user_key, src_user, dst_user, st) -> dict[str, str
 
 
 def _body(person, gmap) -> dict:
-    body = {f: [{k: v for k, v in item.items() if k not in ("metadata", "source")} for item in person[f]]
-            for f in PERSON_FIELDS if f in person and f != "memberships"}
+    """Only the contact's own values (of its first CONTACT source, so singleton fields keep one value);
+    profile values, metadata and output-only sub-fields are left out."""
+    first = next((s.get("id") for s in person.get("metadata", {}).get("sources", []) if s.get("type") == "CONTACT"),
+                 None)
+
+    def own(item):
+        src = item.get("metadata", {}).get("source", {})
+        return src.get("type") == "CONTACT" and first in (None, src.get("id"))
+
+    body = {}
+    for f in PERSON_FIELDS:
+        items = [{k: v for k, v in i.items() if k not in DROPPED_KEYS} for i in person.get(f, []) if own(i)]
+        if items and f != "memberships":
+            body[f] = items
     groups = [gmap[g] for g in (m.get("contactGroupMembership", {}).get("contactGroupResourceName")
                                 for m in person.get("memberships", [])) if g in gmap]
     body["memberships"] = [{"contactGroupMembership": {"contactGroupResourceName": g}}
@@ -48,11 +61,11 @@ def _body(person, gmap) -> dict:
 
 def _update(dst, dst_user, dst_resource, body):
     try:
-        dst.update_contact(dst_user, dst_resource, dst.get_etag(dst_user, dst_resource), body)
+        dst.update_contact(dst_user, dst_resource, {**body, **dst.get_update_meta(dst_user, dst_resource)})
     except ApiError as e:
         if e.reason != "http_400":  # stale etag: re-fetch once and retry
             raise
-        dst.update_contact(dst_user, dst_resource, dst.get_etag(dst_user, dst_resource), body)
+        dst.update_contact(dst_user, dst_resource, {**body, **dst.get_update_meta(dst_user, dst_resource)})
 
 
 def copy_contacts(src, dst, ledger, user_key, src_user, dst_user) -> ContactStats:
@@ -62,7 +75,11 @@ def copy_contacts(src, dst, ledger, user_key, src_user, dst_user) -> ContactStat
     st.found = len(people)
     rows = ledger.contact_rows(user_key)
     live = {p["resourceName"] for p in people}
-    st.removed_on_source = sum(sid not in live and state == "done" for sid, (_, _, state) in rows.items())
+    for sid, (did, old_etag, state) in rows.items():
+        if sid not in live:
+            st.removed_on_source += 1
+            if state in ("failed", "pending"):  # nothing left to retry; not a failure
+                ledger.set_contact(user_key, sid, did, old_etag, "gone")
     for p in people:
         sid, etag = p["resourceName"], p["etag"]
         did, old_etag, state = rows.get(sid, ("", None, None))
