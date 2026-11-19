@@ -4,7 +4,7 @@ import os
 import pytest
 from fakes import make_apis
 
-from movingday.api import CHUNK, SRC_KEY
+from movingday.api import CHUNK, SRC_KEY, ApiError
 from movingday.drive_copy import EXPORTS, FOLDER, FORM, copy_drive
 from movingday.ledger import Ledger
 from movingday.mapping import Mapping, User
@@ -151,7 +151,7 @@ def test_sharing_translated_notifications_off(env):
     assert (st.shares_added, st.outside_shares, st.shares_failed) == (5, 1, 0)
     assert len(led.drive_shares(U, sid)) == 5
     # sendNotificationEmail=False is set inside Drive.add_permission (tests/test_api.py); nothing else shares
-    assert {c[0] for c in a.dst_drive.calls} <= {"root_id", "upload", "add_permission"}
+    assert {c[0] for c in a.dst_drive.calls} <= {"root_id", "list_created", "upload", "add_permission"}
 
 
 def test_share_to_own_destination_skipped(env):
@@ -328,3 +328,73 @@ def test_restored_on_source_copied_again_with_sharing(env):
     assert st.files_copied == 1 and new["id"] != old and not new["trashed"]
     assert [p["emailAddress"] for p in new["perms"].values()] == [D2]
     assert list(led.drive_shares(U, sid).values()) == list(new["perms"])
+
+
+def test_folders_given_away_keep_child_copies_live(env):
+    a, led = env
+    f = a.src_drive.add_folder(S)
+    g = a.src_drive.add_folder(S, f)
+    sid = a.src_drive.add_file(S, PDF, g, b"x")
+    run(env)
+    a.src_drive.set_owner(f, S2)
+    a.src_drive.set_owner(g, S2)
+    st = run(env)
+    assert st.files_trashed == 2 and dst_of(env, f)["trashed"] and dst_of(env, g)["trashed"]
+    assert not dst_of(env, sid)["trashed"] and dst_of(env, sid)["parents"] == [f"root-{D}"]
+    assert led.drive_rows(U)[sid]["placed"] == 0 and st.unplaced == 1
+    run(env, (U2, S2, D2))
+    st = run(env)
+    assert st.files_moved == 1 and not dst_of(env, sid)["trashed"]
+    assert dst_of(env, sid)["parents"] == [dst_of(env, g, U2)["id"]]
+
+
+def test_move_takes_old_parent_from_destination(env):
+    a, led = env
+    f1, f2 = a.src_drive.add_folder(S), a.src_drive.add_folder(S)
+    sid = a.src_drive.add_file(S, PDF, f1, b"x")
+    run(env)
+    a.src_drive.set_owner(f1, "out@else.com")
+    led.set_drive(U, f1, state="trashed")  # the old folder's row no longer resolves
+    a.src_drive.edit(sid, parent=f2)
+    run(env)
+    assert dst_of(env, sid)["parents"] == [dst_of(env, f2)["id"]]
+
+
+def test_gone_pending_row_orphan_trashed(env):
+    a, led = env
+    sid = a.src_drive.add_file(S, PDF, content=b"x")
+    did, _ = a.dst_drive.upload(D, {"appProperties": {SRC_KEY: sid}}, lambda: iter([b"x"]), PDF, False)
+    led.set_drive(U, sid, state="pending")
+    a.src_drive.files[sid]["trashed"] = True
+    st = run(env)
+    assert st.files_trashed == 1 and a.dst_drive.files[did]["trashed"]
+    row = led.drive_rows(U)[sid]
+    assert (row["state"], row["dst_id"]) == ("trashed", did) and led.get_meta(U, "drive_trashed") == "1"
+
+
+def test_adopted_refused_conversion_counted_as_office(env):
+    a, led = env
+    sid = a.src_drive.add_file(S, DOC, content=b"d")
+    a.dst_drive.refuse_conversion(sid)
+    a.dst_drive.upload(D, {"appProperties": {SRC_KEY: sid}, "mimeType": DOC}, lambda: iter([b"d"]),
+                       EXPORTS[DOC], True)
+    led.set_drive(U, sid, state="pending")
+    run(env)
+    assert led.drive_rows(U)[sid]["kind"] == "office" and led.get_meta(U, "drive_kept_as_office") == "1"
+    a.src_drive.edit(sid, content=b"d2")
+    a.dst_drive.fail_next("update_content", ApiError("http_500", False))
+    run(env)
+    assert led.drive_rows(U)[sid]["state"] == "failed" and led.get_meta(U, "drive_kept_as_office") == "1"
+
+
+def test_gone_folder_not_trashed_when_move_out_fails(env):
+    a, led = env
+    f = a.src_drive.add_folder(S)
+    sid = a.src_drive.add_file(S, PDF, f, b"x")
+    run(env)
+    a.src_drive.set_owner(f, S2)
+    a.dst_drive.fail_next("update_meta", ApiError("http_500", False))
+    st = run(env)
+    assert st.files_failed == 1 and not dst_of(env, f)["trashed"] and not dst_of(env, sid)["trashed"]
+    assert (led.drive_rows(U)[f]["state"], led.drive_rows(U)[f]["reason"]) == ("done", "contents_not_moved")
+    assert run(env).files_trashed == 1 and not dst_of(env, sid)["trashed"]

@@ -471,6 +471,9 @@ class FakeDrive(_Fake):
     def trash(self, user, file_id) -> None:
         self._write()
         self._get(file_id)["trashed"] = True
+        for f in self.files.values():  # as on Drive, a folder's contents go to the trash with it
+            if file_id in f["parents"] and not f["trashed"]:
+                self.trash.__wrapped__(self, user, f["id"])
 
 
 def make_apis() -> Apis:

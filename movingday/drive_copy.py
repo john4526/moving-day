@@ -117,6 +117,55 @@ def _parents_first(folders: list[dict]) -> list[dict]:
     return out
 
 
+def _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, live, created, st):
+    """Trash the copy of every item no longer owned. Runs after the item loop, so files moved out of a gone
+    folder on the source are moved first. Trashing a folder trashes its contents, so this user's copies still
+    inside a gone folder are first moved to the top (placed=0; re-placed if the folder comes back under
+    another owner); a folder whose move-out failed is not trashed this run."""
+    gone = {}
+    for sid, row in rows.items():
+        if sid in live or row["state"] == "trashed":
+            continue
+        try:
+            did = row["dst_id"] if row["state"] in ("done", "failed") else ""
+            if not did and row["state"] in ("pending", "failed"):  # a crash after upload leaves a tagged copy
+                did = dst.find_by_src(dst_user, sid) or ""
+        except ApiError as e:
+            ledger.set_drive(user_key, sid, reason=e.reason)
+            st.files_failed += 1
+            continue
+        gone[sid] = did
+    gone_dirs = {did: sid for sid, did in gone.items() if did and rows[sid]["kind"] == "folder"}
+    blocked = set()
+    for csid, crow in ledger.drive_rows(user_key).items():
+        cdid = crow["dst_id"]
+        old = (created.get(cdid, {}).get("parents") or [""])[0]
+        if csid not in live or not cdid or crow["state"] not in ("done", "failed") or old not in gone_dirs:
+            continue
+        try:
+            dst.update_meta(dst_user, cdid, {}, add_parents=dst_root, remove_parents=old)
+        except ApiError:
+            blocked.add(gone_dirs[old])
+            continue
+        created[cdid]["parents"] = [dst_root]
+        ledger.set_drive(user_key, csid, placed=0)
+        st.files_moved += 1
+        st.unplaced += 1
+    for sid, did in gone.items():
+        try:
+            if sid in blocked:
+                raise ApiError("contents_not_moved", False)
+            if did:
+                dst.trash(dst_user, did)
+                st.files_trashed += 1
+        except ApiError as e:
+            if e.reason not in ("http_404", "http_410"):
+                ledger.set_drive(user_key, sid, reason=e.reason)  # state kept, so the next run retries
+                st.files_failed += 1
+                continue
+        ledger.set_drive(user_key, sid, dst_id=did, state="trashed")
+
+
 def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_domain) -> DriveStats:
     st = DriveStats()
     items = src.list_owned(src_user)
@@ -124,6 +173,7 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
     files = [i for i in items if i["mimeType"] != FOLDER]
     rows = ledger.drive_rows(user_key)
     src_root, dst_root = src.root_id(src_user), dst.root_id(dst_user)
+    created = {f["id"]: f for f in dst.list_created(dst_user)}  # current parents and type of every copy
 
     def target(parent) -> tuple[str, int]:
         if not parent or parent == src_root:
@@ -162,9 +212,10 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                     dst.update_meta(dst_user, did, {k: item[k] for k in ("name", "description", "starred",
                                                                           "modifiedTime") if k in item})
                     st.files_updated += not folder
-                old_parent = target(row["src_parent"])[0] if row["placed"] else dst_root
+                old_parent = (created.get(did, {}).get("parents") or [dst_root])[0]
                 if old_parent != dst_parent:
                     dst.update_meta(dst_user, did, {}, add_parents=dst_parent, remove_parents=old_parent)
+                    created.setdefault(did, {})["parents"] = [dst_parent]
                     st.files_moved += 1
             else:
                 kind, old_fp, did = ("folder" if folder else "file"), "", None
@@ -173,6 +224,8 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                     for sig in ledger.drive_shares(user_key, sid):
                         ledger.drop_drive_share(user_key, sid, sig)
                     did = dst.find_by_src(dst_user, sid)
+                    if did and office and created.get(did, {}).get("mimeType") == office:
+                        kind = "office"  # adopted copy whose conversion was refused
                 if not did:
                     meta = {k: item[k] for k in ("name", "description", "starred", "modifiedTime", "createdTime")
                             if k in item}
@@ -185,6 +238,7 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
                         if office and not converted:
                             kind = "office"
                             st.kept_as_office += 1
+                created[did] = {"id": did, "parents": [dst_parent]}
                 if folder:
                     st.folders += 1
                 else:
@@ -198,25 +252,11 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
             ledger.set_drive(user_key, sid, state="failed", reason=e.reason)
             st.files_failed += 1
 
-    # Gone from the owned list last, so files moved out of a deleted folder are moved before it is trashed.
-    live = {i["id"] for i in items}
-    for sid, row in rows.items():
-        if sid in live or row["state"] == "trashed":
-            continue
-        if row["dst_id"] and row["state"] in ("done", "failed"):
-            try:
-                dst.trash(dst_user, row["dst_id"])
-            except ApiError as e:
-                if e.reason not in ("http_404", "http_410"):
-                    ledger.set_drive(user_key, sid, reason=e.reason)  # state kept, so the next run retries
-                    st.files_failed += 1
-                    continue
-            st.files_trashed += 1
-        ledger.set_drive(user_key, sid, state="trashed")
-
+    _close_gone(dst, ledger, user_key, dst_user, dst_root, rows, {i["id"] for i in items}, created, st)
     final = ledger.drive_rows(user_key).values()
     for name, value in (("drive_unsupported", st.unsupported), ("drive_forms", st.forms),
-                        ("drive_kept_as_office", sum(r["kind"] == "office" and r["state"] == "done" for r in final)),
+                        ("drive_kept_as_office", sum(r["kind"] == "office" and r["state"] in ("done", "failed")
+                                                     and r["dst_id"] != "" for r in final)),
                         ("drive_unplaced", st.unplaced), ("drive_outside_shares", st.outside_shares),
                         ("drive_shares_failed", st.shares_failed),
                         ("drive_trashed", sum(r["state"] == "trashed" and r["dst_id"] != "" for r in final))):
