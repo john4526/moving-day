@@ -44,7 +44,7 @@ def compare_mail(src, dst, src_user, dst_user, preexisting: int) -> MailResult:
     missing = sum(max(sh[h] - dh[h], 0) for h in both) + max(sn - dn, 0)
     duplicates = sum(max(dh[h] - sh[h], 0) for h in both if sh[h])
     extra = sum(dh[h] for h in both if not sh[h]) + max(dn - sn, 0)
-    mismatches = sum(abs(sl[k] - dl[k]) > preexisting for k in snames - SKIP_LABELS)
+    mismatches = sum(dl[k] < sl[k] or dl[k] - sl[k] > preexisting for k in snames - SKIP_LABELS)
     return MailResult(stotal, dtotal, missing, duplicates, extra, mismatches, st, dt)
 
 
@@ -59,6 +59,7 @@ class CalResult:
     attendees_src: int = 0
     attendees_dst: int = 0
     acl_missing: int = 0
+    events_missing: int = 0
 
 
 def _tally(events):
@@ -68,8 +69,9 @@ def _tally(events):
 def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user) -> CalResult:
     r = CalResult()
     cmap = ledger.cal_map(user_key)
-    dst_cals = {c["id"] for c in dst.list_calendars(dst_user)}
-    dst_has_primary = any(c["primary"] for c in dst.list_calendars(dst_user))
+    dst_list = dst.list_calendars(dst_user)
+    dst_cals = {c["id"] for c in dst_list}
+    dst_has_primary = any(c["primary"] for c in dst_list)
     for cal in src.list_calendars(src_user):
         if cal["accessRole"] != "owner":
             continue
@@ -84,21 +86,42 @@ def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user) ->
         target = cmap.get(key)
         if target is None or not (dst_has_primary if target == "primary" else target in dst_cals):
             r.acl_missing += len(wanted)
+            r.events_missing += len(ev)
             continue
         r.calendars_dst += 1
+        dst_events = dst.list_events(dst_user, target)
         r.events_dst, r.series_dst, r.attendees_dst = (
-            a + b for a, b in zip((r.events_dst, r.series_dst, r.attendees_dst),
-                                  _tally(dst.list_events(dst_user, target))))
+            a + b for a, b in zip((r.events_dst, r.series_dst, r.attendees_dst), _tally(dst_events)))
+        present, rows = {e["id"] for e in dst_events}, ledger.event_rows(user_key, key)
+        r.events_missing += sum(
+            rows.get(e["id"], ("", "", ""))[2] != "done" or rows[e["id"]][0] not in present for e in ev)
         have = {(x["role"], x["scope"]["type"], x["scope"].get("value", "").lower())
                 for x in dst.list_acl(dst_user, target)}
         r.acl_missing += len(wanted - have)
     return r
 
 
+class InventoryError(Exception):
+    def __init__(self, reason: str, row: int):
+        super().__init__(f"{reason} (row {row})")
+        self.reason = reason
+        self.row = row
+
+
 def load_inventory(path) -> list[tuple[str, str, str]]:
     with open(path, newline="", encoding="utf-8-sig") as f:
-        return [((x.get("type") or "").strip().lower(), (x.get("address") or "").strip().lower(),
-                 (x.get("parent") or "").strip().lower()) for x in csv.DictReader(f)]
+        reader = csv.DictReader(f)
+        header = [(h or "").strip().lower() for h in reader.fieldnames or []]
+        if header != ["type", "address", "parent"]:
+            raise InventoryError("missing_column", 1)
+        reader.fieldnames = header
+        rows = []
+        for n, x in enumerate(reader, start=2):
+            row = tuple((x.get(c) or "").strip().lower() for c in header)
+            if row[0] not in ("user", "group", "member", "alias"):
+                raise InventoryError("bad_type", n)
+            rows.append(row)
+    return rows
 
 
 def compare_inventory(rows, directory, dest_domain) -> dict:

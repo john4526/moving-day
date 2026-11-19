@@ -2,7 +2,7 @@ import pytest
 from fakes import make_apis
 
 from wsmigrate.calendar_copy import copy_calendars
-from wsmigrate.compare import compare_calendar, compare_inventory, compare_mail, load_inventory
+from wsmigrate.compare import InventoryError, compare_calendar, compare_inventory, compare_mail, load_inventory
 from wsmigrate.ledger import Ledger
 from wsmigrate.mail import copy_mail
 from wsmigrate.mapping import Mapping, User
@@ -200,3 +200,48 @@ def test_inventory_missing_group_member_and_alias_counted(tmp_path):
     d.users, d.groups, d.aliases = {"ann@y.org"}, {"team@y.org": {"ann@y.org"}}, {"a1@y.org": "ann@y.org"}
     assert compare_inventory(rows, d, "y.org") == {
         "missing_users": 1, "missing_groups": 1, "missing_members": 2, "missing_aliases": 1}
+
+
+def test_label_dropped_on_destination_counts_despite_preexisting(env):
+    a, _ = env
+    lid = a.src_gmail.add_label(S, "Board")
+    mail(a, "s", 1, ["INBOX", lid])
+    mail(a, "d", 1, ["INBOX"])
+    assert cmp_mail(a, pre=1).label_mismatches == 1
+
+
+def test_inventory_bad_header_and_type_rejected(tmp_path):
+    p = tmp_path / "i.csv"
+    p.write_text("Type,Email,Parent\nuser,a@x.org,\n")
+    with pytest.raises(InventoryError) as e:
+        load_inventory(str(p))
+    assert (e.value.reason, e.value.row) == ("missing_column", 1)
+    p.write_text("Type, ADDRESS ,parent\nusers,a@x.org,\n")
+    with pytest.raises(InventoryError) as e:
+        load_inventory(str(p))
+    assert (e.value.reason, e.value.row) == ("bad_type", 2)
+
+
+def test_event_missing_not_hidden_by_extra_event(cal):
+    a, led = cal
+    for n in range(2):
+        a.src_cal.add_event(S, S, {"summary": "s", "id": f"e{n}"})
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, U, S, D)
+    evs = a.dst_cal.cals[D][D]["events"]
+    del evs[next(iter(evs))]
+    a.dst_cal.add_event(D, D, {"summary": "unrelated"})
+    r = cmp_cal(a, led)
+    assert (r.events_src, r.events_dst, r.events_missing) == (2, 2, 1)
+
+
+def test_events_missing_for_unmapped_and_deleted_destination_calendar(cal):
+    a, led = cal
+    a.src_cal.add_calendar(S, "sec1")
+    a.src_cal.add_event(S, "sec1", {"summary": "q"})
+    a.src_cal.add_event(S, "sec1", {"summary": "q2"})
+    a.src_cal.add_acl(S, "sec1", {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
+    r = cmp_cal(a, led)
+    assert (r.events_missing, r.acl_missing) == (2, 1)
+    led.set_cal(U, "sec1", "gone")  # mapped, but deleted on the destination
+    r = cmp_cal(a, led)
+    assert (r.calendars_dst, r.events_missing, r.acl_missing) == (0, 2, 1)
