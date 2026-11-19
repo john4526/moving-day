@@ -264,12 +264,16 @@ class _Files:
         return _Req(go)
 
     def get(self, **kw):
-        return _Req(lambda: {"exportLinks": {"application/pdf": "https://link/x"}})
+        return _Req(lambda: {"exportLinks": self.svc.links})
+
+
+LINK = "https://link/x"
 
 
 class _Svc:
-    def __init__(self, link_status=200, export_error=None):
-        self.export_error, self.requests = export_error, []
+    def __init__(self, link_status=206, export_error=None, links=None, link_data=b"linked"):
+        self.export_error, self.requests, self.perm_calls = export_error, [], []
+        self.links = {"application/pdf": LINK} if links is None else links
         svc = self
 
         class Http:
@@ -278,8 +282,7 @@ class _Svc:
                 return svc.respond(url, method, body, headers)
 
         self._http = Http()
-        self.link_status = link_status
-        self.perm_calls = []
+        self.link_status, self.link_data = link_status, link_data
 
     def files(self):
         return _Files(self)
@@ -294,56 +297,106 @@ class _Svc:
         return P()
 
     def respond(self, url, method, body, headers):
-        if url == "https://link/x":
-            return Response({"status": self.link_status}), b"linked"
-        raise AssertionError(url)
+        assert url == LINK
+        lo, hi = headers["range"].removeprefix("bytes=").split("-")
+        part = self.link_data[int(lo):int(hi) + 1]
+        total = len(self.link_data)
+        return Response({"status": self.link_status, "content-range": f"bytes {lo}-{int(lo) + len(part) - 1}/{total}"}), part
+
+
+TOO_BIG = _http_error(403, "exportSizeLimitExceeded")
 
 
 def test_drive_export_falls_back_to_export_link():
-    svc = _Svc(export_error=_http_error(403, "exportSizeLimitExceeded"))
+    svc = _Svc(export_error=TOO_BIG)
     assert b"".join(_drive(svc).export("u@x", "f1", "application/pdf")) == b"linked"
-    assert [r[0] for r in svc.requests] == ["https://link/x"]
-    both = _Svc(link_status=500, export_error=_http_error(403, "exportSizeLimitExceeded"))
-    both.link_status = 404
+    assert [r[0] for r in svc.requests] == [LINK]
+
+
+def test_drive_export_link_streams_in_bounded_pieces():
+    data = bytes(CHUNK + 3)
+    svc = _Svc(export_error=TOO_BIG, link_data=data)
+    assert [len(c) for c in _drive(svc).export("u@x", "f1", "application/pdf")] == [CHUNK, 3]
+
+
+@pytest.mark.parametrize("svc", [
+    _Svc(export_error=TOO_BIG, link_status=404),  # the link fails too
+    _Svc(export_error=TOO_BIG, links={}),  # no link for this type
+])
+def test_drive_export_too_large_when_no_fallback(svc):
     with pytest.raises(ApiError) as e:
-        list(_drive(both).export("u@x", "f1", "application/pdf"))
+        list(_drive(svc).export("u@x", "f1", "application/pdf"))
     assert e.value.reason == "export_too_large" and not e.value.retryable
 
 
-def test_drive_upload_refused_conversion_retries_unconverted():
-    svc = _Svc()
-    sent = []
+def _uploader(*, refuse_open=0, refuse_final=0, rate_open=0):
+    """Stand-in svc for uploads: refuses conversion (400) at session open and/or on the final chunk."""
+    svc, state = _Svc(), {"sent": [], "opens": [], "rate": rate_open, "refuse_open": refuse_open,
+                          "refuse_final": refuse_final}
 
     def respond(url, method, body, headers):
         if method == "POST":
-            if json.loads(body).get("mimeType", "").startswith("application/vnd.google-apps."):
+            meta = json.loads(body)
+            state["opens"].append(meta.get("mimeType"))
+            converted = meta.get("mimeType", "").startswith("application/vnd.google-apps.")
+            if state["rate"] and converted:
+                state["rate"] -= 1
+                return Response({"status": 403}), json.dumps({"error": {"errors": [{"reason": "userRateLimitExceeded"}]}}).encode()
+            if state["refuse_open"] and converted:
                 return Response({"status": 400}), b""
-            return Response({"status": 200, "location": "https://up/1"}), b""
-        sent.append((headers["Content-Range"], body))
-        return Response({"status": 200}), b'{"id": "new1"}'
+            return Response({"status": 200, "location": "https://up/" + ("c" if converted else "u")}), b""
+        state["sent"].append((url, headers["Content-Range"], body))
+        last = not headers["Content-Range"].endswith("/*")
+        if last and state["refuse_final"] and url.endswith("/c"):
+            return Response({"status": 400}), b""
+        return Response({"status": 200 if last else 308}), b'{"id": "new1"}'
 
     svc.respond = respond
-    meta = {"name": "n", "mimeType": "application/vnd.google-apps.document"}
-    out = _drive(svc).upload("u@x", meta, iter([b"abc"]), "application/msword", True)
+    return svc, state
+
+
+META = {"name": "n", "mimeType": "application/vnd.google-apps.document"}
+
+
+def test_drive_upload_refused_conversion_retries_unconverted():
+    svc, st = _uploader(refuse_open=1)
+    out = _drive(svc).upload("u@x", META, lambda: iter([b"abc"]), "application/msword", True)
     assert out == ("new1", False)
-    assert sent == [("bytes 0-2/3", b"abc")]
-    assert json.loads(svc.requests[1][2])["mimeType"] == "application/msword"
+    assert st["sent"] == [("https://up/u", "bytes 0-2/3", b"abc")]
+    assert st["opens"] == [META["mimeType"], "application/msword"]
+
+
+def test_drive_upload_conversion_refused_at_final_chunk_retries_with_fresh_chunks():
+    svc, st = _uploader(refuse_final=1)
+    made = []
+
+    def factory():
+        made.append(1)
+        return iter([b"ab", b"cde"])
+
+    assert _drive(svc).upload("u@x", META, factory, "application/msword", True) == ("new1", False)
+    assert len(made) == 2
+    assert [(u[-1], r) for u, r, _ in st["sent"]] == [("c", "bytes 0-1/*"), ("c", "bytes 2-4/5"),
+                                                      ("u", "bytes 0-1/*"), ("u", "bytes 2-4/5")]
+
+
+def test_drive_upload_rate_limited_open_is_retried_and_still_converts(monkeypatch):
+    monkeypatch.setattr("movingday.api.time.sleep", lambda s: None)
+    svc, st = _uploader(rate_open=1)
+    assert _drive(svc).upload("u@x", META, lambda: iter([b"abc"]), "application/msword", True) == ("new1", True)
+    assert st["opens"] == [META["mimeType"]] * 2
 
 
 def test_drive_upload_sends_chunks_with_open_ended_range_until_last():
-    svc = _Svc()
-    sent = []
+    svc, st = _uploader()
+    assert _drive(svc).upload("u@x", {"name": "n"}, lambda: iter([b"ab", b"cde"]), "text/plain", False) == (
+        "new1", False)
+    assert [r for _, r, _ in st["sent"]] == ["bytes 0-1/*", "bytes 2-4/5"]
 
-    def respond(url, method, body, headers):
-        if method == "POST":
-            return Response({"status": 200, "location": "https://up/1"}), b""
-        sent.append(headers["Content-Range"])
-        last = headers["Content-Range"].endswith("/5")
-        return Response({"status": 200 if last else 308}), b'{"id": "n"}'
 
-    svc.respond = respond
-    assert _drive(svc).upload("u@x", {"name": "n"}, iter([b"ab", b"cde"]), "text/plain", False) == ("n", False)
-    assert sent == ["bytes 0-1/*", "bytes 2-4/5"]
+def test_drive_update_meta_rejects_trashed():
+    with pytest.raises(ValueError):
+        _drive(_Svc()).update_meta("u@x", "f1", {"trashed": True})
 
 
 def test_drive_add_permission_never_notifies():
@@ -383,3 +436,16 @@ def test_fake_drive_refuses_writes_on_source():
     assert d.root_id("u@x") == "root-u@x"
     f = d.add_file("u@x", "text/plain", content=b"x")
     assert d.list_owned("u@x")[0]["parents"] == ["root-u@x"] and d.list_owned("u@x")[0]["id"] == f
+
+
+def test_fake_drive_upload_stores_uploaded_mime_unless_converted():
+    d = FakeDrive()
+    meta = {"name": "n", "mimeType": "application/vnd.google-apps.document",
+            "appProperties": {"movingday_src": "s1"}}
+    ok, conv = d.upload("u@x", meta, lambda: iter([b"x"]), "application/msword", True)
+    assert conv and d.files[ok]["mimeType"] == "application/vnd.google-apps.document"
+    d.refuse_conversion("s1")
+    refused, conv = d.upload("u@x", meta, lambda: iter([b"x"]), "application/msword", True)
+    assert not conv and d.files[refused]["mimeType"] == "application/msword"
+    plain, conv = d.upload("u@x", meta, lambda: iter([b"x"]), "application/msword", False)
+    assert not conv and d.files[plain]["mimeType"] == "application/msword"

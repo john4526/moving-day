@@ -429,8 +429,9 @@ class FakeDrive(_Fake):
         parent = (meta.pop("parents", None) or [None])[0]
         src = meta.get("appProperties", {}).get(SRC_KEY)
         converted = convert and src not in self._refused
-        kind = meta.pop("mimeType", mime) if converted else mime
-        return self.add_file(user, kind, parent, content=b"".join(chunks), **meta), converted
+        google_mime = meta.pop("mimeType", mime)
+        kind = google_mime if converted else mime
+        return self.add_file(user, kind, parent, content=b"".join(chunks()), **meta), converted
 
     @api
     def update_content(self, user, file_id, chunks, mime) -> None:

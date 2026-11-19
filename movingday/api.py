@@ -17,7 +17,7 @@ from google.auth.exceptions import TransportError
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
+from googleapiclient.http import HttpRequest, MediaInMemoryUpload, MediaIoBaseDownload
 
 
 class ApiError(Exception):
@@ -323,8 +323,7 @@ class Drive(_Google):
                     ssl.SSLError, TransportError):
                 raise ApiError("network_error", True) from None
             if resp.status not in ok:
-                raise ApiError("rate_limited" if resp.status == 429 else f"http_{resp.status}",
-                               resp.status == 429 or resp.status >= 500)
+                raise _to_api_error(HttpError(resp, content))
             return resp, content
 
         return with_retry(once)
@@ -348,8 +347,7 @@ class Drive(_Google):
             fileId=file_id, fields="nextPageToken,permissions(id,role,type,emailAddress,domain,allowFileDiscovery)",
             pageSize=100, pageToken=tok), "permissions")
 
-    def download(self, user, file_id):
-        req = self._f(user).get_media(fileId=file_id)
+    def _stream(self, req):
         buf = io.BytesIO()
         dl = MediaIoBaseDownload(buf, req, chunksize=CHUNK)
         done = False
@@ -361,22 +359,27 @@ class Drive(_Google):
             if data:
                 yield data
 
+    def download(self, user, file_id):
+        yield from self._stream(self._f(user).get_media(fileId=file_id))
+
     def export(self, user, file_id, mime):
-        # ponytail: an export is capped by Google (10 MB; links a little more), so it is held whole before slicing.
         try:
             data = self._call(lambda: self._f(user).export(fileId=file_id, mimeType=mime))
-        except ApiError as e:
+        except ApiError as e:  # the normal export is capped by Google (10 MB), so it is held whole
             if e.reason != "export_size_limit":
                 raise
+        else:
+            yield from _slices(data)
+            return
+        # ponytail: the link is streamed in CHUNK ranges; Range support on export links is confirmed in rehearsal.
+        try:
             link = self._call(lambda: self._f(user).get(fileId=file_id, fields="exportLinks")
                               ).get("exportLinks", {}).get(mime)
-            try:
-                if not link:
-                    raise ApiError("export_too_large", False)
-                _, data = self._raw(user, link)
-            except ApiError:
-                raise ApiError("export_too_large", False) from None
-        yield from _slices(data)
+            if not link:
+                raise ApiError("export_too_large", False)
+            yield from self._stream(HttpRequest(self._svc(user)._http, lambda resp, content: content, link))
+        except ApiError:
+            raise ApiError("export_too_large", False) from None
 
     def create_folder(self, user, meta) -> str:
         body = {**meta, "mimeType": FOLDER}
@@ -402,24 +405,24 @@ class Drive(_Google):
             cur, start = nxt, end
 
     def upload(self, user, meta, chunks, mime, convert) -> tuple[str, bool]:
+        """chunks is a factory returning a fresh iterator, so a refused conversion can be retried unconverted."""
         url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
-        converted = convert
-        try:
-            loc = self._session(user, "POST", url, meta if convert else {**meta, "mimeType": mime}, mime)
-        except ApiError as e:
-            # ponytail: only a refusal when the session opens is retried, before any chunk is read; one at the
-            # final chunk would need the content again, so it surfaces as an error.
-            if not convert or e.retryable or e.reason not in ("http_400", "http_403"):
-                raise
-            converted = False
-            loc = self._session(user, "POST", url, {**meta, "mimeType": mime}, mime)
-        return self._send(user, loc, chunks), converted
+        if convert:
+            try:
+                return self._send(user, self._session(user, "POST", url, meta, mime), chunks()), True
+            except ApiError as e:  # refusal: 400, or 403 for a reason other than rate limiting (those retried)
+                if e.retryable or e.reason not in ("http_400", "http_403"):
+                    raise
+        loc = self._session(user, "POST", url, {**meta, "mimeType": mime}, mime)
+        return self._send(user, loc, chunks()), False
 
     def update_content(self, user, file_id, chunks, mime) -> None:
         url = f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=resumable"
         self._send(user, self._session(user, "PATCH", url, {}, mime), chunks)
 
     def update_meta(self, user, file_id, meta, add_parents="", remove_parents="") -> None:
+        if "trashed" in meta:
+            raise ValueError("use trash()")
         self._call(lambda: self._f(user).update(fileId=file_id, body=meta, addParents=add_parents or None,
                                                 removeParents=remove_parents or None, fields="id"))
 

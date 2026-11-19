@@ -15,11 +15,10 @@ def _owner(path, n):
 def test_no_delete_trash_or_modify_in_package():
     hits = [(_owner(p, n), l.strip()) for p, lines in SOURCES.items() for n, l in enumerate(lines)
             if re.search(r"\.(delete|trash|untrash|modify|batchDelete|batchModify)\(", l)]
-    assert sorted(hits) == [
-        (("api.py", "Calendar", "delete_event"), hits[0][1]),
-        (("api.py", "Drive", "remove_permission"), hits[1][1]),
-    ]
-    assert ".events().delete(" in hits[0][1] and ".permissions().delete(" in hits[1][1]
+    kinds = (".events().delete(", ".permissions().delete(")
+    assert len(hits) == 2
+    assert {(o, next(k for k in kinds if k in l)) for o, l in hits} == {
+        (("api.py", "Calendar", "delete_event"), kinds[0]), (("api.py", "Drive", "remove_permission"), kinds[1])}
 
 
 def test_trashed_true_only_in_drive_trash():
