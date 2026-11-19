@@ -137,6 +137,11 @@ To set the tool up and run it, read
   account and grant domain-wide delegation. On the source side that grant
   cannot be limited to the users being moved.
 
+Python packages, installed by `pip install -e .`:
+
+- `google-api-python-client` and `google-auth`: Google API access
+- `pytest` and `pytest-html`: the validation checks and the HTML report
+
 To run the logic tests, which need no Google access:
 
 ```
@@ -144,6 +149,50 @@ python3 -m venv .venv
 .venv/bin/pip install -e .
 .venv/bin/python -m pytest
 ```
+
+### Running on Windows
+
+Moving Day runs on Windows only inside WSL. This path has not been tested
+yet; run the logic tests first to confirm the tool starts.
+
+What the Windows machine needs:
+
+- Windows 10 version 2004 or later, or Windows 11, with virtualisation
+  enabled.
+- WSL 2 with a Linux distribution. Ubuntu 24.04 ships Python 3.12, which
+  meets the 3.11 minimum.
+- Inside WSL: `python3`, `python3-venv`, `python3-pip` and `git`.
+- The same four Python packages as above, installed inside WSL.
+
+Set-up, in an administrator PowerShell window, then restart when asked:
+
+```
+wsl --install -d Ubuntu
+```
+
+Then inside the Ubuntu terminal:
+
+```
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git
+git clone https://github.com/john4526/moving-day.git
+cd moving-day
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/python -m pytest
+```
+
+Rules that matter under WSL:
+
+- Use the Python inside WSL, not Python for Windows.
+- Keep the config, mapping, inventory and key files in the Linux home folder
+  (for example `~/movingday-data`), not on the Windows drive (`/mnt/c/...`).
+  Files on the Windows drive appear writable by everyone, and Moving Day
+  refuses a config or mapping file that looks that way.
+- Make those files private to your user: `chmod 600` on each file.
+- A copy can run for days. Turn off sleep, and pause Windows updates so the
+  machine does not restart. If it does stop, run the same `copy` command
+  again; it resumes where it stopped.
 
 ## What must never be committed
 
