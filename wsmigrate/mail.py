@@ -1,6 +1,5 @@
 """Resumable mail copy. Message bytes live only inside one loop iteration; nothing is written out."""
 import hashlib
-from collections import Counter
 from dataclasses import dataclass
 from email.parser import BytesHeaderParser
 
@@ -18,6 +17,8 @@ class MailStats:
 
 
 def _hash_header(value: str) -> str:
+    # ponytail: non-ASCII (RFC-violating) Message-IDs may hash differently from the API's decoded value;
+    # recovery then drops and retries them (worst case one duplicate, reported by validation).
     return hashlib.sha256(value.strip().encode("utf-8", "surrogateescape")).hexdigest()
 
 
@@ -50,14 +51,15 @@ def _recover(dst, ledger, user_key, dst_user) -> None:
     rows = ledger.pending(user_key)
     if not rows:
         return
-    seen: Counter = Counter()
-    for mid, _ in dst.list_messages(dst_user):
+    seen: dict[str, list[tuple[str, str]]] = {}
+    for mid, thread in dst.list_messages(dst_user):
         header, _labels = dst.get_header_and_labels(dst_user, mid)
         if header is not None and header.strip():
-            seen[_hash_header(header)] += 1
+            seen.setdefault(_hash_header(header), []).append((mid, thread))
     for src_id, h in rows:
-        if not h.startswith("raw:") and seen[h] > ledger.done_hash_count(user_key, h):
-            ledger.mark_done(user_key, src_id, "", "")
+        found, n = seen.get(h, []), ledger.done_hash_count(user_key, h)
+        if not h.startswith("raw:") and len(found) > n:
+            ledger.mark_done(user_key, src_id, *found[n])
         else:
             ledger.drop_pending(user_key, src_id)
 
@@ -73,7 +75,7 @@ def copy_mail(src, dst, ledger, user_key, src_user, dst_user) -> MailStats:
     # ponytail: relies on list order being newest-first; sort by internalDate if the rehearsal shows split threads
     listed = list(reversed(src.list_messages(src_user)))
     done = ledger.done_ids(user_key)
-    copied = skipped = failed = no_date = 0
+    copied = skipped = failed = 0
     for msg_id, _thread in listed:
         if msg_id in done:
             continue
@@ -92,11 +94,13 @@ def copy_mail(src, dst, ledger, user_key, src_user, dst_user) -> MailStats:
                 ledger.dst_thread(user_key, m.thread_id))
             ledger.mark_done(user_key, msg_id, new_id, new_thread)
             copied += 1
-            no_date += not has_date
+            if not has_date:  # counted immediately so an interrupted run cannot lose it
+                n = int(ledger.get_meta(user_key, "no_date_header") or 0)
+                ledger.set_meta(user_key, "no_date_header", str(n + 1))
         except ApiError as e:
             ledger.mark_failed(user_key, msg_id, e.reason)
             failed += 1
-    total = int(ledger.get_meta(user_key, "no_date_header") or 0) + no_date
-    ledger.set_meta(user_key, "no_date_header", str(total))
+    if ledger.get_meta(user_key, "no_date_header") is None:
+        ledger.set_meta(user_key, "no_date_header", "0")
     ledger.set_meta(user_key, "history_end", str(src.profile(src_user)["historyId"]))
     return MailStats(len(listed), copied, skipped, failed)

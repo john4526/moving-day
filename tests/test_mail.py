@@ -115,6 +115,7 @@ def test_pending_row_already_on_destination_is_not_reinserted(env):
     a.dst_gmail.add_message("d@x", r, ["INBOX"])
     led.mark_pending(U, mid, "t1", msgid_hash(r))
     run(env)
+    assert led.dst_thread(U, "t1")
     assert len(dst_msgs(env)) == 1
     assert led.counts(U)["done"] == 1
 
@@ -216,3 +217,24 @@ def test_meta_set_once_and_end_overwritten(env):
     assert led.get_meta(U, "preexisting") == "1"
     assert led.get_meta(U, "history_start") == start
     assert led.get_meta(U, "history_end") != start
+
+
+def test_no_date_header_survives_interrupt(env):
+    a, led = env
+    a.src_gmail.add_message("s@x", raw(1, date=False), ["INBOX"])
+    a.src_gmail.add_message("s@x", raw(2), ["INBOX"])
+    real = a.dst_gmail.insert
+    state = {"n": 0}
+
+    def flaky(user, r, labels, thread):
+        state["n"] += 1
+        if state["n"] == 2:
+            raise KeyboardInterrupt
+        return real(user, r, labels, thread)
+
+    a.dst_gmail.insert = flaky
+    with pytest.raises(KeyboardInterrupt):
+        run(env)
+    a.dst_gmail.insert = real
+    run(env)
+    assert led.get_meta(U, "no_date_header") == "1"
