@@ -26,6 +26,36 @@ There are three Mac users:
 administrator and can read everything, so an agent running there would not
 be kept from the keys or the data.
 
+## Before anything else: the scan
+
+Before any migration, run one read-only scan across every account. It plans
+the rehearsal, the mock and the cutover. It needs only the source half of
+steps 1 to 5 (the source service account, the Mac users, a config file and a
+mapping file); the destination does not need to exist yet.
+
+- **Credentials:** the source service account only (read-only scopes). The
+  destination key file is not opened.
+- **Mapping file:** the destination addresses may be placeholders (for
+  example `u001@placeholder.example`), because the scan never uses them.
+- **Command** (the agent runs it like every other command):
+
+  ```
+  cd /
+  sudo -u movingday /Users/movingday/venv/bin/movingday check --source-only --config /Users/movingday/data/config.toml
+  ```
+
+It prints one JSON line: per user the message count and the number of own,
+delegated and team calendars, plus a `summary`. It writes nothing and copies
+nothing. Run it again later without `--source-only` to also see what is
+already in each destination mailbox.
+
+| Number | What it decides |
+|---|---|
+| Largest mailboxes (`largest_mailbox`, each `src_messages`) | Who must be in the mock, and how long the freeze must be. |
+| `total_messages` and the speed seen in the rehearsal | Which mail copy method to use. |
+| `delegated_calendars`, `team_calendars` (and the `accounts_with_` counts) | Whom to test and brief. People with team calendars need a batch order, because the first one copied takes the calendar. |
+| Near-empty accounts | Put them in an early batch. |
+
 ## 1. Create the service accounts (administrators of each account)
 
 A service account is a robot login that the tool uses instead of a person.
@@ -125,11 +155,16 @@ agent must not.**
    readable by other users:
 
    ```
+   sudo chown -R movingday /Users/movingday
    sudo chmod -R go-rwx /Users/movingday
    ls -ld /Users/movingday /Users/movingday/*
+   sudo ls -l /Users/movingday/data
    ```
 
-   The last command should show `drwx------` for every folder.
+   The third command should show `drwx------` for every folder. The last
+   one shows the owner of each data file: every file must be owned by
+   `movingday`. A file owned by another user (for example one you copied in
+   as yourself) is refused with `untrusted_file`; the `chown` above fixes it.
    The config file and the mapping file must be owned by `movingday` and
    must not be writable by anyone else. The tool checks this every time it
    starts and refuses with the reason `untrusted_file` (exit 2) otherwise.
@@ -270,7 +305,7 @@ sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/mo
 
 | Command | What it does |
 |---|---|
-| `check` | Checks the mapping and access for all users. Prints each user's source message count and destination message count. Moves no data. |
+| `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
 | `copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...]` | Copies. With neither `--mail` nor `--calendar` it copies both. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
 | `status [--batch NAME]` | Prints copied, failed and pending counts per user. |
 | `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account. |

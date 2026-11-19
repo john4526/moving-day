@@ -346,3 +346,4 @@ These were made while building the tool. Approved sections above are unchanged.
 - Unsupported calendar entry types (out-of-office, focus time, working
   location, birthdays) are reported, not treated as failures.
 - `--help` is disabled; every output is one JSON line.
+- `check` is now a pre-migration scan: `--source-only` uses the source key only, and the output adds own, delegated and team calendar counts and a summary. Comparisons no longer claim shared calendars.

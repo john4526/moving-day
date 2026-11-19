@@ -65,6 +65,9 @@ an item says "else", the fallback is named.
 - [ ] Delegated and co-managed calendars: an assistant's view of the
   director's calendar is skipped (not copied into the assistant's account),
   and a team calendar managed by several people is copied once.
+  A user's own calendar shared with "manage sharing" goes to whichever
+  co-manager is copied first. Check the scan's `team_calendars` count and
+  decide the batch order for those people.
 - [ ] Domain-wide and group calendar sharing: the translated rules (our
   domain and our groups moved to the destination domain) are accepted.
   Recheck them after the practice domain move.
