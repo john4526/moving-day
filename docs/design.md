@@ -375,3 +375,223 @@ the scan and the report show how many each person has, for information.
   the source.
 - People API behaviours not yet confirmed (bulk-create limits, label
   handling, starred) go on the rehearsal checklist.
+
+## Drive files (added 19 November 2026, approved)
+
+Scope change: Drive files are now in scope (your decision, 19 Nov). This
+replaces "Drive files" in the non-goals. Shared drives stay out.
+
+### What is copied
+
+Every file and folder each person **owns** in My Drive, not trashed:
+Google Docs, Sheets and Slides, and uploaded files of any type (PDFs, Office
+files, images, video). The owner's copy carries it; people it was shared
+with get it back through the sharing copy, so it reappears in their
+"Shared with me". Files our people can open but someone outside the mapping
+file owns (for example parent-organisation staff) are not copied; the scan
+counts them per person, for information.
+
+### Approaches (decided 19 Nov: A)
+
+- **A. Export and re-upload inside Moving Day (chosen).** Same ledger,
+  re-run safety, privacy rules and report as mail and calendars; the agent
+  runs it. Loses comments, suggestions and version history; every file gets
+  a new address.
+- **B. Google Workspace Migrate.** Keeps revisions and sharing, but it is a
+  separate install operated by hand, aimed at 1,000+ user moves; same reason
+  approach A in the original design was rejected.
+- **C. Users download and re-upload their own files.** No code, same losses,
+  70 people doing it by hand, no validation report.
+- Rejected outright: sharing each source file with the destination user so
+  it can be copied directly. That changes the source (anti-goal).
+
+### What is lost (users are told before cutover)
+
+- Comments, suggestions and version history on every file.
+- File addresses: links in old mail, calendar events and other documents
+  still point at the source copy.
+- Formatting that does not survive a round trip through Word, Excel or
+  PowerPoint format (for example some Sheets formulas, Apps Script bound to
+  a file, embedded charts linked to other files).
+- Files of types Google cannot export (below).
+
+### Goals and anti-goals added
+
+- Goal: every in-scope file reaches its owner's destination Drive, in the
+  same folder structure, shared with the same people (translated through
+  the mapping file).
+- Goal: uploaded files arrive byte for byte identical (checked by checksum).
+- Anti-goal: a sharing notification email reaching anyone during the copy.
+- Anti-goal: a file name, folder name or file content appearing in agent
+  output, logs, the ledger or the report.
+- Anti-goal: a file landing in the wrong person's Drive.
+
+### Access
+
+| Side | Scope | Used for |
+|---|---|---|
+| Source | `drive.readonly` | list, download and export files; read sharing |
+| Destination | `drive.file` | create folders and files, set sharing, read back only what the tool created |
+
+`drive.file` is the narrowest destination scope: the tool can only see
+files it created. *My call.* It also means the tool cannot see or count
+files a destination user made themselves. If the rehearsal shows it is not
+enough (for example for reading back sharing), fall back to `drive` and
+record the decision. Like Gmail, the source grant cannot be limited to our
+users: it can read every file in the parent organisation's Drive. Enable
+the Google Drive API on both projects.
+
+### How it works
+
+For each user, under the existing per-user parallelism:
+
+1. **Folders first**, parents before children, creating the same names on
+   the destination and recording source folder to destination folder in the
+   ledger.
+2. **Files.** Each file is created in the destination folder that matches
+   its source parent.
+   - Docs, Sheets and Slides are exported (to .docx, .xlsx, .pptx) and
+     uploaded with conversion back to Google format.
+   - Uploaded files are downloaded and uploaded unchanged.
+   - Kept: name, description, starred, modified time and created time
+     (where Google allows setting them; confirm in rehearsal).
+   - If Google refuses to convert an exported file back on upload, the
+     .docx, .xlsx or .pptx is kept unconverted and counted as "kept as
+     Office file" (your decision, 19 Nov). It counts as copied, not failed.
+   - Not exportable, counted and reported, not failures: Forms (your
+     decision, 19 Nov: count and report; people rebuild the ones they need
+     by hand), Drawings, Sites, My Maps, Jamboards, Apps Script projects,
+     shortcuts and other Google types with no export. *My call on Drawings
+     and shortcuts.*
+3. **Sharing.** Each file's and folder's sharing is copied with
+   notifications off, translated with the same rules as calendars (users
+   through the mapping file; our source domain and groups on it moved to
+   `dest_domain`; anything else kept and counted as an outside share).
+   Link sharing ("anyone with the link") is copied as a setting; the link
+   itself is new. Sharing a destination file to someone outside Google
+   without a notification is refused by Google; those are counted as failed
+   shares.
+4. **Files in someone else's folder.** If a file's folder belongs to
+   another person in the mapping file, the file is placed in that person's
+   copied folder if it already exists, otherwise at the top of the owner's
+   Drive and marked "unplaced". A re-run moves unplaced files into their
+   folder once it has been copied. Batches should therefore be copied with
+   the folder owners first or re-run once at the end. Files in a folder
+   owned by someone outside the mapping file go to the top of the owner's
+   Drive and are counted.
+
+Content handling: file content passes through memory in bounded chunks
+(download chunk, upload chunk) and is never written to disk, so large
+videos do not need to fit in memory.
+
+Re-run and crash safety:
+
+- Each created file and folder is tagged on the destination with a private
+  app property holding the source file ID (an ID, not content). The ledger
+  row is written "pending" before the upload and "done" after. On resume, a
+  pending row is looked up on the destination by that tag before retrying,
+  so a crash mid-upload does not leave a duplicate.
+- Ledger rows hold source ID, destination ID, source modified time, a
+  checksum for uploaded files, source parent folder ID, a fingerprint of
+  the file's translated sharing, state and reason code. No names.
+
+### Schedule: pre-copy, then top up in the freeze (your decision, 19 Nov)
+
+Drive is copied in the week before cutover, while people are still working,
+and re-run as often as useful. During the freeze, `copy --drive` runs once
+more and copies only what changed. This keeps Drive volume out of the mail
+outage. The schedule above gains a step 0 ("pre-copy Drive"), and step 3
+includes the Drive top-up.
+
+Every run lists each person's owned files again and compares them with the
+ledger, so a re-run brings the destination back in step with the source:
+
+- **Content changed** (source modified time or checksum differs): the
+  destination file's content is replaced in place. Same file, same address
+  on the destination.
+- **Renamed or moved**: the destination file is renamed or moved to match.
+  Moves into, out of and between other people's folders follow the
+  "someone else's folder" rule above.
+- **Sharing changed**: sharing added on the source is added on the
+  destination. Sharing removed on the source is removed on the destination,
+  but only sharing the tool itself added. *My call:* otherwise someone whose
+  access was taken away on the source keeps it on the destination. This is
+  the one Drive call that removes something, and it only touches
+  destination files the tool created.
+- **Deleted on the source, or no longer owned by this person** (trashed,
+  deleted, or ownership moved to someone else): the destination copy is
+  moved to the destination user's trash, where it can be restored for 30
+  days, and counted. *My call:* leaving it would show people files they
+  had deleted. Nothing is ever permanently deleted, and only files the tool
+  created can be trashed. If ownership moved to another person in the
+  mapping file, that person's run copies it as a new file.
+- **New file**: copied as usual.
+
+The source is never changed, so the pre-copy is safe while people work. The
+lockout stops our users, but parent-organisation staff who can edit our
+users' files can still change them during the freeze. The top-up catches
+changes made before it runs. The report's "Drive in step" check catches
+anything changed after.
+
+The mock on a subset of real users (stage 2) exercises the pre-copy and a
+top-up run.
+
+Limits to confirm in the rehearsal, not assumed:
+
+- Google refuses to export a Google file larger than 10 MB through the
+  normal export call. The fallback is the file's export link with the same
+  credentials; if that also fails, the file is recorded as failed with
+  reason `export_too_large`.
+- Google limits uploads to 750 GB per user per day. The scan reports total
+  bytes per person so this can be planned around.
+- Conversion of large Sheets and Slides on upload may time out or be
+  refused; failures are recorded by reason.
+
+### Commands
+
+- `copy` gains `--drive`. With no part flags, mail, calendars, contacts and
+  Drive are all copied.
+- `check` adds, per person: owned files, owned folders, total bytes,
+  files of each unsupported type, files owned by people outside the mapping
+  file that they can open, and files in folders owned by someone else. The
+  summary adds total bytes and the largest Drive.
+
+### Report checks (expected and actual for each)
+
+- File count: source owned and supported versus destination created.
+- Files missing on the destination (by source ID tag).
+- Folder count.
+- Uploaded files whose checksum does not match.
+- Sharing: translated source sharing versus destination sharing, per file.
+- Drive in step: source files changed, renamed, moved, re-shared or deleted
+  since their last copy. Expected 0. During the mock this is reported as
+  expected-to-differ, like the mail "freeze held" check.
+- Informational line: unsupported files not copied (Forms counted
+  separately), files kept as Office files, unplaced files, files in folders
+  owned outside the mapping, outside shares, failed shares, files moved to
+  the destination trash, and a fixed note that comments and version history
+  are not carried over.
+
+### Tests added
+
+Logic tests against a fake Drive: folder tree recreated; Google files
+exported and converted, uploaded files byte-identical; sharing translated
+with notifications always off; re-run copies nothing new; a crash between
+upload and ledger write leaves no duplicate; unplaced files are placed on a
+re-run; unsupported types counted, not failed; a refused conversion keeps
+the Office file; top-up runs handle changed content, rename, move, sharing
+added and removed, and source deletion (destination trash, never a
+permanent delete); no Drive call of any kind is made with the source
+credentials except reads; the only Drive removals are destination
+permission removal and destination trash, on tool-created files; the
+privacy test's marker phrase in a file name, folder name and file content
+never appears in output, logs, ledger or report.
+
+### Build notes
+
+- The source grant request to the parent organisation adds only
+  `drive.readonly`. Ask for it in the same request as the contacts scopes.
+- `copy --contacts` and the contacts counts in `check` (task C2 of the
+  contacts plan) land before the Drive CLI work, which builds on them.
+- `tests/test_no_destructive_calls.py` is widened to allow exactly the two
+  destination Drive removals above, in `api.py`, and nothing else.
