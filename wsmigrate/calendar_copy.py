@@ -68,29 +68,36 @@ def _events(src, dst, ledger, user_key, src_user, dst_user, key, src_cal, dst_ca
             st.events_failed += 1
 
 
-def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st) -> int:
-    """Returns the number of rules whose insert failed."""
-    failed = 0
-    have = {(r["role"], r["scope"]["type"], r["scope"].get("value", "").lower())
-            for r in dst.list_acl(dst_user, dst_cal)}
-    for r in src.list_acl(src_user, src_cal):
+def translate_rules(src_rules, mapping, src_user, dst_user):
+    """Yield (role, scope type, value or None, outside) for each source rule that is to be copied."""
+    for r in src_rules:
         typ, val = r["scope"]["type"], r["scope"].get("value")
         if val and val.lower() == src_user.lower():
             continue
+        outside = False
         if typ == "user":
             mapped = mapping.dest_for(val)
             if mapped:
                 val = mapped
             if val.lower() == dst_user.lower():
                 continue
-            if not mapped:
-                st.outside_shares += 1
-        sig = (r["role"], typ, (val or "").lower())
+            outside = not mapped
+        yield r["role"], typ, val, outside
+
+
+def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st) -> int:
+    """Returns the number of rules whose insert failed."""
+    failed = 0
+    have = {(r["role"], r["scope"]["type"], r["scope"].get("value", "").lower())
+            for r in dst.list_acl(dst_user, dst_cal)}
+    for role, typ, val, outside in translate_rules(src.list_acl(src_user, src_cal), mapping, src_user, dst_user):
+        st.outside_shares += outside
+        sig = (role, typ, (val or "").lower())
         if sig in have:
             continue
         scope = {"type": typ, **({"value": val} if val else {})}
         try:
-            dst.insert_acl(dst_user, dst_cal, {"role": r["role"], "scope": scope}, send_notifications=False)
+            dst.insert_acl(dst_user, dst_cal, {"role": role, "scope": scope}, send_notifications=False)
         except ApiError:
             failed += 1
             continue

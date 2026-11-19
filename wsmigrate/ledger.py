@@ -123,6 +123,11 @@ class Ledger:
             "SELECT src_event, dst_event, updated, state FROM events WHERE user_key=? AND src_cal=?",
             (user_key, src_cal))}
 
+    def failed_event_ids(self, user_key, src_cal, reason):
+        return {r[0] for r in self._r(
+            "SELECT src_event FROM events WHERE user_key=? AND src_cal=? AND state='failed' AND reason=?",
+            (user_key, src_cal, reason))}
+
     def set_event(self, user_key, src_cal, src_event, dst_event, updated, state, reason=None):
         self._w("INSERT OR REPLACE INTO events VALUES(?,?,?,?,?,?,?)",
                 (user_key, src_cal, src_event, dst_event, updated, state, reason))

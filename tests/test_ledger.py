@@ -149,3 +149,11 @@ def test_mark_done_without_pending_row(tmp_path):
     led.mark_done("u001", "m1", "d1", "dt1")
     assert led.done_ids("u001") == {"m1"}
     assert led.counts("u001") == {"done": 1, "failed": 0, "pending": 0}
+
+
+def test_failed_event_ids_filters_by_reason(tmp_path):
+    led = make(tmp_path)
+    led.set_event("u001", "primary", "e1", "", "t", "failed", "unsupported_event_type")
+    led.set_event("u001", "primary", "e2", "", "t", "failed", "http_500")
+    led.set_event("u001", "other", "e3", "", "t", "failed", "unsupported_event_type")
+    assert led.failed_event_ids("u001", "primary", "unsupported_event_type") == {"e1"}
