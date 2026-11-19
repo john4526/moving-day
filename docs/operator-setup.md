@@ -47,8 +47,9 @@ is never opened, and the destination does not need to exist yet.
   sudo -u movingday /Users/movingday/venv/bin/movingday check --source-only --config /Users/movingday/data/config.toml
   ```
 
-It prints one JSON line: per user the message count and the number of own,
-delegated and team calendars, plus a `summary`. It writes nothing and copies
+It prints one JSON line: per user the message count, the number of own,
+delegated and team calendars, and the number of contacts and other contacts,
+plus a `summary`. It writes nothing and copies
 nothing. Run it again later without `--source-only` to also see what is
 already in each destination mailbox.
 
@@ -56,6 +57,7 @@ already in each destination mailbox.
 |---|---|
 | Largest mailboxes (`largest_mailbox`, each `src_messages`) | Who must be in the mock, and how long the freeze must be. |
 | `total_messages` and the speed seen in the rehearsal | Which mail copy method to use. |
+| `contacts`, `other_contacts`, `total_contacts` | How big the contacts copy is. Other contacts (addresses Gmail saved for autocomplete) are counted for information and not copied. |
 | `delegated_calendars`, `team_calendars` (and the `accounts_with_` counts) | Whom to test and brief. People with team calendars need a batch order, because the first one copied takes the calendar. |
 | Near-empty accounts | Put them in an early batch. |
 
@@ -69,8 +71,8 @@ Do these steps once for each account, signed in as a super administrator of
 that account. For the source this is the parent organisation's administrator.
 
 1. In the Google Cloud console, create a project (or pick an existing one).
-2. In that project, enable these APIs: Gmail API and Google Calendar API.
-   For the destination only, also enable Admin SDK API.
+2. In that project, enable these APIs: Gmail API, Google Calendar API and
+   People API. For the destination only, also enable Admin SDK API.
 3. Create a service account. Create a JSON key for it and download the file.
    Treat the key like a password.
 4. Copy the service account's numeric Client ID.
@@ -82,13 +84,13 @@ that account. For the source this is the parent organisation's administrator.
 **Source account scopes** (read only):
 
 ```
-https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/calendar.acls.readonly
+https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/calendar.acls.readonly,https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/contacts.other.readonly
 ```
 
 **Destination account scopes:**
 
 ```
-https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly
+https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/contacts
 ```
 
 Notes:
@@ -308,8 +310,8 @@ sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/mo
 
 | Command | What it does |
 |---|---|
-| `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
-| `copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...]` | Copies. With neither `--mail` nor `--calendar` it copies both. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
+| `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts, contact and other-contact counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
+| `copy --batch NAME [--mail] [--calendar] [--contacts] [--allow-existing KEY ...]` | Copies. With none of `--mail`, `--calendar` and `--contacts` it copies all three. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
 | `status [--batch NAME]` | Prints copied, failed and pending counts per user. |
 | `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account. |
 
@@ -352,6 +354,13 @@ Output uses user keys (`u001`), never addresses. Some fields you may see:
   counted. Shares to our own domain, and to groups on it, are moved to
   `dest_domain`.
 
+Contacts: with `--contacts` (or no part flag) each user's saved contacts
+and their labels are copied (`contacts_found`, `contacts_copied`,
+`contacts_updated`, `contacts_failed`, `labels_created`). A contact edited on
+the source is updated on the destination; a contact removed on the source is
+counted in `removed_on_source` and never deleted. A failed contact makes that
+user's `ok` false; run `copy` again to retry. Photos are not copied.
+
 Calendars: each user's primary calendar is copied, and each team (group)
 calendar they own or manage is copied once, by the first user who reaches
 it. Other people's calendars that a user can manage (for example an
@@ -362,7 +371,8 @@ These counts are not in the JSON output but are shown in the report's
 "carried over notes" row for each user, for information: split threads,
 messages with no Date header (copied, but showing a different date),
 calendar entries of unsupported types not copied, outside shares, shares
-that failed to copy, and shared calendars skipped. A failed share is also
+that failed to copy, shared calendars skipped, other contacts (not copied)
+and contacts removed on the source. A failed share is also
 caught by the `verify` sharing check, which compares the source's sharing
 rules with the destination's.
 

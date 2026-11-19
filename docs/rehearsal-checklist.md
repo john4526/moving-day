@@ -74,6 +74,33 @@ an item says "else", the fallback is named.
 - [ ] Calendar `403 quotaExceeded` is not retried by the tool. Note it here
   if seen.
 
+## D2. Contacts (People API)
+
+- [ ] Bulk create limit: how many contacts per minute and per day does
+  `createContact` allow per user, and does the tool's retry cope? Note the
+  speed seen.
+- [ ] The system group `starred` exists on a destination account and a
+  contact created with that membership is starred.
+- [ ] A stale etag on `updateContact` returns 400 (FAILED_PRECONDITION). The
+  copy retries once on any `http_400` after fetching a fresh etag.
+- [ ] `updateContact` is accepted with `metadata.sources` (the CONTACT entry
+  and etag from `people.get`) and `updatePersonFields` listing every copied
+  field, including `memberships`.
+- [ ] Label membership set through `memberships` on create and update keeps
+  user labels and `starred` (no `contactGroups.members.modify` is used).
+- [ ] Output-only sub-fields are not needed on write (names.displayName,
+  phoneNumbers.canonicalForm, formattedType are stripped).
+- [ ] `otherContacts.list` accepts `readMask=metadata`, and the
+  `contacts.other.readonly` scope is accepted for the source.
+- [ ] Creating a contact group whose name exists returns 409, and the tool
+  then reuses the existing group (letter case ignored).
+- [ ] `connections.list` with `sources=READ_SOURCE_TYPE_CONTACT` returns no
+  profile-only fields (a contact shows only its own saved values).
+- [ ] Photos are not copied: a contact with a photo copies without it and
+  without error.
+- [ ] Contacts count on the destination equals the source after `copy`; the
+  report's contact checks pass.
+
 ## E. Directory
 
 - [ ] Aliases that belong to groups (not users): the tool only checks user

@@ -1,6 +1,6 @@
 # Moving Day (`movingday`): Workspace migration utility
 
-Command-line tool to copy mail and calendars between two Google Workspace
+Command-line tool to copy mail, calendars and contacts between two Google Workspace
 accounts, operated by an AI agent with human approval of irreversible steps,
 and validated by a test suite with HTML reports.
 
@@ -17,9 +17,9 @@ Every command needs `--config PATH` and prints one line of JSON. `--help` is
 disabled. Exit codes: 0 success, 1 finished with failures, 2 refused to run.
 
 - `movingday check --config PATH` : validates the mapping and access for all
-  users; no data moves
-- `movingday copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...] --config PATH` :
-  copies (both mail and calendar if neither flag is given); safe to re-run
+  users and counts contacts; no data moves
+- `movingday copy --batch NAME [--mail] [--calendar] [--contacts] [--allow-existing KEY ...] --config PATH` :
+  copies (mail, calendars and contacts if no part flag is given); safe to re-run
 - `movingday status [--batch NAME] --config PATH` : per-user counts
 - `movingday verify --batch NAME [--expect-changes] --config PATH` : runs the
   validation checks and writes the HTML report
