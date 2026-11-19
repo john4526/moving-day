@@ -223,3 +223,163 @@ def test_fake_people_groups_and_other_contacts():
         p.create_contact("b@x", {"memberships": [{"contactGroupMembership": {"contactGroupResourceName": g}}]})
     p.set_other_contacts("a@x", 4)
     assert p.count_other_contacts("a@x") == 4 and p.count_other_contacts("b@x") == 0
+
+
+# --- Drive (real wrapper over stand-in HTTP/service objects) ---
+import json
+import threading
+
+from googleapiclient.errors import HttpError
+from httplib2 import Response
+
+from fakes import FakeDrive
+from movingday.api import CHUNK, Drive
+
+
+def _drive(svc):
+    d = Drive.__new__(Drive)
+    d._services = {(threading.get_ident(), "u@x"): svc}
+    return d
+
+
+def _http_error(status, reason=""):
+    body = json.dumps({"error": {"errors": [{"reason": reason}]}}).encode()
+    return HttpError(Response({"status": status}), body)
+
+
+class _Req:
+    def __init__(self, fn):
+        self.execute = fn
+
+
+class _Files:
+    def __init__(self, svc):
+        self.svc = svc
+
+    def export(self, **kw):
+        def go():
+            if self.svc.export_error:
+                raise self.svc.export_error
+            return b"exported"
+        return _Req(go)
+
+    def get(self, **kw):
+        return _Req(lambda: {"exportLinks": {"application/pdf": "https://link/x"}})
+
+
+class _Svc:
+    def __init__(self, link_status=200, export_error=None):
+        self.export_error, self.requests = export_error, []
+        svc = self
+
+        class Http:
+            def request(self, url, method="GET", body=None, headers=None):
+                svc.requests.append((url, method, body, headers))
+                return svc.respond(url, method, body, headers)
+
+        self._http = Http()
+        self.link_status = link_status
+        self.perm_calls = []
+
+    def files(self):
+        return _Files(self)
+
+    def permissions(self):
+        svc = self
+
+        class P:
+            def create(self, **kw):
+                svc.perm_calls.append(kw)
+                return _Req(lambda: {"id": "p1"})
+        return P()
+
+    def respond(self, url, method, body, headers):
+        if url == "https://link/x":
+            return Response({"status": self.link_status}), b"linked"
+        raise AssertionError(url)
+
+
+def test_drive_export_falls_back_to_export_link():
+    svc = _Svc(export_error=_http_error(403, "exportSizeLimitExceeded"))
+    assert b"".join(_drive(svc).export("u@x", "f1", "application/pdf")) == b"linked"
+    assert [r[0] for r in svc.requests] == ["https://link/x"]
+    both = _Svc(link_status=500, export_error=_http_error(403, "exportSizeLimitExceeded"))
+    both.link_status = 404
+    with pytest.raises(ApiError) as e:
+        list(_drive(both).export("u@x", "f1", "application/pdf"))
+    assert e.value.reason == "export_too_large" and not e.value.retryable
+
+
+def test_drive_upload_refused_conversion_retries_unconverted():
+    svc = _Svc()
+    sent = []
+
+    def respond(url, method, body, headers):
+        if method == "POST":
+            if json.loads(body).get("mimeType", "").startswith("application/vnd.google-apps."):
+                return Response({"status": 400}), b""
+            return Response({"status": 200, "location": "https://up/1"}), b""
+        sent.append((headers["Content-Range"], body))
+        return Response({"status": 200}), b'{"id": "new1"}'
+
+    svc.respond = respond
+    meta = {"name": "n", "mimeType": "application/vnd.google-apps.document"}
+    out = _drive(svc).upload("u@x", meta, iter([b"abc"]), "application/msword", True)
+    assert out == ("new1", False)
+    assert sent == [("bytes 0-2/3", b"abc")]
+    assert json.loads(svc.requests[1][2])["mimeType"] == "application/msword"
+
+
+def test_drive_upload_sends_chunks_with_open_ended_range_until_last():
+    svc = _Svc()
+    sent = []
+
+    def respond(url, method, body, headers):
+        if method == "POST":
+            return Response({"status": 200, "location": "https://up/1"}), b""
+        sent.append(headers["Content-Range"])
+        last = headers["Content-Range"].endswith("/5")
+        return Response({"status": 200 if last else 308}), b'{"id": "n"}'
+
+    svc.respond = respond
+    assert _drive(svc).upload("u@x", {"name": "n"}, iter([b"ab", b"cde"]), "text/plain", False) == ("n", False)
+    assert sent == ["bytes 0-1/*", "bytes 2-4/5"]
+
+
+def test_drive_add_permission_never_notifies():
+    svc = _Svc()
+    assert _drive(svc).add_permission("u@x", "f1", {"role": "reader", "type": "user"}) == "p1"
+    assert svc.perm_calls[0]["sendNotificationEmail"] is False
+
+
+def test_drive_download_yields_bounded_chunks():
+    data = bytes(CHUNK * 2 + 5)
+
+    class Http:
+        def request(self, uri, method="GET", body=None, headers=None):
+            lo, hi = headers["range"].removeprefix("bytes=").split("-")
+            part = data[int(lo):int(hi) + 1]
+            return Response({"status": 206, "content-range": f"bytes {lo}-{int(lo) + len(part) - 1}/{len(data)}"}), part
+
+    class Req:
+        uri, http, headers = "https://dl", Http(), {}
+
+    class Files:
+        def get_media(self, **kw):
+            return Req()
+
+    class Svc:
+        def files(self):
+            return Files()
+
+    chunks = list(_drive(Svc()).download("u@x", "f1"))
+    assert [len(c) for c in chunks] == [CHUNK, CHUNK, 5]
+
+
+def test_fake_drive_refuses_writes_on_source():
+    d = FakeDrive(source=True)
+    with pytest.raises(AssertionError):
+        d.trash("u@x", "nope")
+    assert d.root_id("u@x") == "root-u@x"
+    f = d.add_file("u@x", "text/plain", content=b"x")
+    assert d.list_owned("u@x")[0]["parents"] == ["root-u@x"] and d.list_owned("u@x")[0]["id"] == f

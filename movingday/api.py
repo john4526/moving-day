@@ -5,6 +5,7 @@ The People (contacts) wrapper is first exercised in the rehearsal too.
 """
 import base64
 import http.client
+import io
 import json
 import ssl
 import threading
@@ -16,7 +17,7 @@ from google.auth.exceptions import TransportError
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaInMemoryUpload
+from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseDownload
 
 
 class ApiError(Exception):
@@ -56,6 +57,8 @@ def _to_api_error(e: HttpError) -> ApiError:
             errors = json.loads(e.content)["error"]["errors"]
             if any(x.get("reason") in _RATE_REASONS for x in errors):
                 return ApiError("rate_limited", True)
+            if any(x.get("reason") == "exportSizeLimitExceeded" for x in errors):
+                return ApiError("export_size_limit", False)
         except Exception:
             pass
     return ApiError(f"http_{status}", status >= 500)
@@ -282,6 +285,164 @@ class People(_Google):
         if src is None:
             raise ApiError("no_contact_source", False)
         return {"etag": p["etag"], "metadata": {"sources": [{k: src.get(k) for k in ("type", "id", "etag")}]}}
+
+
+CHUNK = 8 * 1024 * 1024  # a multiple of 256 KiB, as resumable uploads require
+SRC_KEY = "movingday_src"
+FOLDER = "application/vnd.google-apps.folder"
+_ITEM = "id,mimeType,parents,version,modifiedTime,createdTime,md5Checksum,size,name,description,starred"
+
+
+class _Step:
+    """Lets _call/_execute drive any callable that raises HttpError, e.g. a download's next_chunk."""
+
+    def __init__(self, fn):
+        self.execute = fn
+
+
+def _slices(data: bytes):
+    for i in range(0, len(data), CHUNK):
+        yield data[i:i + CHUNK]
+
+
+class Drive(_Google):
+    """File content is passed through as chunks of at most CHUNK bytes, never joined and never on disk.
+    Nothing here deletes a file; remove_permission and trash are the only removals."""
+    _api, _version = "drive", "v3"
+
+    def _f(self, user):
+        return self._svc(user).files()
+
+    def _raw(self, user, url, method="GET", body=None, headers=None, ok=(200,)):
+        """One authorised HTTP request; returns (response, content). Used where googleapiclient cannot
+        stream (export links, uploads of unknown length)."""
+        def once():
+            try:
+                resp, content = self._svc(user)._http.request(url, method, body=body, headers=headers or {})
+            except (TimeoutError, ConnectionError, http.client.HTTPException, httplib2.ServerNotFoundError,
+                    ssl.SSLError, TransportError):
+                raise ApiError("network_error", True) from None
+            if resp.status not in ok:
+                raise ApiError("rate_limited" if resp.status == 429 else f"http_{resp.status}",
+                               resp.status == 429 or resp.status >= 500)
+            return resp, content
+
+        return with_retry(once)
+
+    def root_id(self, user) -> str:
+        return self._call(lambda: self._f(user).get(fileId="root", fields="id"))["id"]
+
+    def list_owned(self, user) -> list[dict]:
+        return self._all(lambda tok: self._f(user).list(
+            q="'me' in owners and trashed=false", fields=f"nextPageToken,files({_ITEM})", pageSize=1000,
+            pageToken=tok), "files")
+
+    def list_shared_owners(self, user) -> list[str]:
+        files = self._all(lambda tok: self._f(user).list(
+            q="not 'me' in owners and trashed=false", fields="nextPageToken,files(owners(emailAddress))",
+            pageSize=1000, pageToken=tok), "files")
+        return [o["emailAddress"] for f in files for o in f.get("owners", [])[:1] if "emailAddress" in o]
+
+    def list_permissions(self, user, file_id) -> list[dict]:
+        return self._all(lambda tok: self._svc(user).permissions().list(
+            fileId=file_id, fields="nextPageToken,permissions(id,role,type,emailAddress,domain,allowFileDiscovery)",
+            pageSize=100, pageToken=tok), "permissions")
+
+    def download(self, user, file_id):
+        req = self._f(user).get_media(fileId=file_id)
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, req, chunksize=CHUNK)
+        done = False
+        while not done:
+            _, done = self._call(lambda: _Step(dl.next_chunk))
+            data = buf.getvalue()
+            buf.seek(0)
+            buf.truncate()
+            if data:
+                yield data
+
+    def export(self, user, file_id, mime):
+        # ponytail: an export is capped by Google (10 MB; links a little more), so it is held whole before slicing.
+        try:
+            data = self._call(lambda: self._f(user).export(fileId=file_id, mimeType=mime))
+        except ApiError as e:
+            if e.reason != "export_size_limit":
+                raise
+            link = self._call(lambda: self._f(user).get(fileId=file_id, fields="exportLinks")
+                              ).get("exportLinks", {}).get(mime)
+            try:
+                if not link:
+                    raise ApiError("export_too_large", False)
+                _, data = self._raw(user, link)
+            except ApiError:
+                raise ApiError("export_too_large", False) from None
+        yield from _slices(data)
+
+    def create_folder(self, user, meta) -> str:
+        body = {**meta, "mimeType": FOLDER}
+        return self._call(lambda: self._f(user).create(body=body, fields="id"))["id"]
+
+    def _session(self, user, method, url, meta, mime) -> str:
+        resp, _ = self._raw(user, url + "&fields=id", method, json.dumps(meta),
+                            {"Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": mime})
+        return resp["location"]
+
+    def _send(self, user, loc, chunks) -> str:
+        """Resumable upload of unknown length: one chunk of lookahead tells which one is last."""
+        it = iter(chunks)
+        cur, start = next(it, b""), 0
+        while True:
+            nxt = next(it, None)
+            end = start + len(cur)
+            rng = (f"bytes {start}-{end - 1}/" if cur else "bytes */") + (str(end) if nxt is None else "*")
+            _, content = self._raw(user, loc, "PUT", cur, {"Content-Range": rng, "Content-Length": str(len(cur))},
+                                   ok=(200, 201) if nxt is None else (308,))
+            if nxt is None:
+                return json.loads(content)["id"]
+            cur, start = nxt, end
+
+    def upload(self, user, meta, chunks, mime, convert) -> tuple[str, bool]:
+        url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
+        converted = convert
+        try:
+            loc = self._session(user, "POST", url, meta if convert else {**meta, "mimeType": mime}, mime)
+        except ApiError as e:
+            # ponytail: only a refusal when the session opens is retried, before any chunk is read; one at the
+            # final chunk would need the content again, so it surfaces as an error.
+            if not convert or e.retryable or e.reason not in ("http_400", "http_403"):
+                raise
+            converted = False
+            loc = self._session(user, "POST", url, {**meta, "mimeType": mime}, mime)
+        return self._send(user, loc, chunks), converted
+
+    def update_content(self, user, file_id, chunks, mime) -> None:
+        url = f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=resumable"
+        self._send(user, self._session(user, "PATCH", url, {}, mime), chunks)
+
+    def update_meta(self, user, file_id, meta, add_parents="", remove_parents="") -> None:
+        self._call(lambda: self._f(user).update(fileId=file_id, body=meta, addParents=add_parents or None,
+                                                removeParents=remove_parents or None, fields="id"))
+
+    def find_by_src(self, user, src_id) -> str | None:
+        files = self._call(lambda: self._f(user).list(
+            q=f"appProperties has {{ key='{SRC_KEY}' and value='{src_id}' }} and trashed=false",
+            fields="files(id)", pageSize=1)).get("files", [])
+        return files[0]["id"] if files else None
+
+    def list_created(self, user) -> list[dict]:
+        return self._all(lambda tok: self._f(user).list(
+            q="trashed=false", fields="nextPageToken,files(id,mimeType,parents,md5Checksum,appProperties)",
+            pageSize=1000, pageToken=tok), "files")
+
+    def add_permission(self, user, file_id, perm) -> str:
+        return self._call(lambda: self._svc(user).permissions().create(
+            fileId=file_id, body=perm, sendNotificationEmail=False, fields="id"))["id"]
+
+    def remove_permission(self, user, file_id, perm_id) -> None:
+        self._call(lambda: self._svc(user).permissions().delete(fileId=file_id, permissionId=perm_id))
+
+    def trash(self, user, file_id) -> None:
+        self._call(lambda: self._f(user).update(fileId=file_id, body={"trashed": True}, fields="id"))
 
 
 class Directory(_Google):

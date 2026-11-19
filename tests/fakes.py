@@ -2,11 +2,12 @@
 import copy
 import datetime
 import functools
+import hashlib
 import inspect
 import itertools
 from email.parser import BytesHeaderParser
 
-from movingday.api import ApiError, RawMessage
+from movingday.api import CHUNK, SRC_KEY, ApiError, RawMessage
 from movingday.runtime import Apis
 
 _ids = itertools.count(1)  # shared by every fake, so source and destination never issue the same id
@@ -305,6 +306,173 @@ class FakePeople(_Fake):
         return {"etag": etag, "metadata": {"sources": [{"type": "CONTACT", "id": resource[7:], "etag": etag}]}}
 
 
+GOOGLE_PREFIX = "application/vnd.google-apps."
+
+
+class FakeDrive(_Fake):
+    """source=True marks the source-account instance: any write method on it raises AssertionError."""
+
+    def __init__(self, source=False):
+        super().__init__()
+        self.source = source
+        self.files = {}  # id -> {"owner", "content", "trashed", "perms": {id: perm}, plus the listed fields}
+        self._refused = set()  # src ids whose conversion is refused
+        self._export_fail = {}  # src id -> reason
+
+    def _write(self):
+        assert not self.source, "write call on a source Drive"
+
+    def _stamp(self):
+        t = datetime.datetime(2026, 1, 1) + datetime.timedelta(seconds=int(self._id("")))
+        return t.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    def _root(self, user):
+        return f"root-{user}"
+
+    def add_file(self, user, mime, parent=None, content=b"", name="f", **meta) -> str:
+        fid = self._id("f")
+        stamp = self._stamp()
+        f = {"id": fid, "owner": user, "mimeType": mime, "parents": [parent or self._root(user)], "version": "1",
+             "modifiedTime": stamp, "createdTime": stamp, "name": name, "description": "", "starred": False,
+             "content": content, "trashed": False, "perms": {}, "appProperties": {}}
+        if not mime.startswith(GOOGLE_PREFIX):
+            f["md5Checksum"], f["size"] = hashlib.md5(content).hexdigest(), str(len(content))
+        f.update(copy.deepcopy(meta))
+        self.files[fid] = f
+        return fid
+
+    def add_folder(self, user, parent=None, name="d") -> str:
+        return self.add_file(user, GOOGLE_PREFIX + "folder", parent, name=name)
+
+    def share(self, user, file_id, perm) -> str:
+        pid = self._id("perm")
+        self._get(file_id)["perms"][pid] = {**copy.deepcopy(perm), "id": pid}
+        return pid
+
+    def set_owner(self, file_id, user):
+        self._get(file_id)["owner"] = user
+
+    def edit(self, file_id, content=None, name=None, parent=None):
+        f = self._get(file_id)
+        if content is not None:
+            f["content"] = content
+            if "md5Checksum" in f:
+                f["md5Checksum"], f["size"] = hashlib.md5(content).hexdigest(), str(len(content))
+        if name is not None:
+            f["name"] = name
+        if parent is not None:
+            f["parents"] = [parent]
+        f["version"] = str(int(f["version"]) + 1)
+        f["modifiedTime"] = self._stamp()
+
+    def refuse_conversion(self, src_id):
+        self._refused.add(src_id)
+
+    def fail_export(self, src_id, reason):
+        self._export_fail[src_id] = reason
+
+    def _get(self, file_id):
+        f = self.files.get(file_id)
+        if f is None:
+            raise ApiError("http_404", False)
+        return f
+
+    def _view(self, f, *keys):
+        return {k: copy.deepcopy(f[k]) for k in keys if k in f}
+
+    @api
+    def root_id(self, user) -> str:
+        return self._root(user)
+
+    @api
+    def list_owned(self, user) -> list[dict]:
+        keys = ("id", "mimeType", "parents", "version", "modifiedTime", "createdTime", "md5Checksum", "size",
+                "name", "description", "starred")
+        return [self._view(f, *keys) for f in self.files.values() if f["owner"] == user and not f["trashed"]]
+
+    @api
+    def list_shared_owners(self, user) -> list[str]:
+        return [f["owner"] for f in self.files.values() if f["owner"] != user and not f["trashed"]
+                and any(p.get("emailAddress") == user for p in f["perms"].values())]
+
+    @api
+    def list_permissions(self, user, file_id) -> list[dict]:
+        return copy.deepcopy(list(self._get(file_id)["perms"].values()))
+
+    def _chunks(self, data):
+        for i in range(0, len(data), CHUNK):
+            yield data[i:i + CHUNK]
+
+    @api
+    def download(self, user, file_id):
+        return self._chunks(self._get(file_id)["content"])
+
+    @api
+    def export(self, user, file_id, mime):
+        f = self._get(file_id)
+        src = f["appProperties"].get(SRC_KEY, file_id)
+        if file_id in self._export_fail or src in self._export_fail:
+            raise ApiError(self._export_fail.get(file_id) or self._export_fail[src], False)
+        return self._chunks(f["content"])
+
+    @api
+    def create_folder(self, user, meta) -> str:
+        self._write()
+        meta = copy.deepcopy(meta)
+        parent = (meta.pop("parents", None) or [None])[0]
+        return self.add_file(user, GOOGLE_PREFIX + "folder", parent, **meta)
+
+    @api
+    def upload(self, user, meta, chunks, mime, convert) -> tuple[str, bool]:
+        self._write()
+        meta = copy.deepcopy(meta)
+        parent = (meta.pop("parents", None) or [None])[0]
+        src = meta.get("appProperties", {}).get(SRC_KEY)
+        converted = convert and src not in self._refused
+        kind = meta.pop("mimeType", mime) if converted else mime
+        return self.add_file(user, kind, parent, content=b"".join(chunks), **meta), converted
+
+    @api
+    def update_content(self, user, file_id, chunks, mime) -> None:
+        self._write()
+        self.edit(file_id, content=b"".join(chunks))
+
+    @api
+    def update_meta(self, user, file_id, meta, add_parents="", remove_parents="") -> None:
+        self._write()
+        f = self._get(file_id)
+        f.update(copy.deepcopy(meta))
+        f["parents"] = [p for p in f["parents"] if p != remove_parents] + ([add_parents] if add_parents else [])
+        f["modifiedTime"] = self._stamp()
+
+    @api
+    def find_by_src(self, user, src_id) -> str | None:
+        return next((i for i, f in self.files.items() if f["owner"] == user and not f["trashed"]
+                     and f["appProperties"].get(SRC_KEY) == src_id), None)
+
+    @api
+    def list_created(self, user) -> list[dict]:
+        return [self._view(f, "id", "mimeType", "parents", "md5Checksum", "appProperties")
+                for f in self.files.values() if f["owner"] == user and not f["trashed"]]
+
+    @api
+    def add_permission(self, user, file_id, perm) -> str:
+        self._write()
+        return self.share(user, file_id, perm)
+
+    @api
+    def remove_permission(self, user, file_id, perm_id) -> None:
+        self._write()
+        if self._get(file_id)["perms"].pop(perm_id, None) is None:
+            raise ApiError("http_404", False)
+
+    @api
+    def trash(self, user, file_id) -> None:
+        self._write()
+        self._get(file_id)["trashed"] = True
+
+
 def make_apis() -> Apis:
     return Apis(src_gmail=FakeGmail(), dst_gmail=FakeGmail(), src_cal=FakeCalendar(), dst_cal=FakeCalendar(),
-                dst_dir=FakeDirectory(), src_people=FakePeople(), dst_people=FakePeople())
+                dst_dir=FakeDirectory(), src_people=FakePeople(), dst_people=FakePeople(),
+                src_drive=FakeDrive(source=True), dst_drive=FakeDrive())

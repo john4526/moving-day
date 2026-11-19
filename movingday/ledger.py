@@ -33,7 +33,19 @@ CREATE TABLE IF NOT EXISTS contacts(
 CREATE TABLE IF NOT EXISTS contact_groups(
   user_key TEXT NOT NULL, src_group TEXT NOT NULL, dst_group TEXT NOT NULL,
   PRIMARY KEY(user_key, src_group));
+CREATE TABLE IF NOT EXISTS drive_items(
+  user_key TEXT NOT NULL, src_id TEXT NOT NULL, dst_id TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'file', src_version TEXT NOT NULL DEFAULT '', src_modified TEXT NOT NULL DEFAULT '',
+  md5 TEXT NOT NULL DEFAULT '', src_parent TEXT NOT NULL DEFAULT '', placed INTEGER NOT NULL DEFAULT 1,
+  share_fp TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'pending', reason TEXT,
+  PRIMARY KEY(user_key, src_id));
+CREATE TABLE IF NOT EXISTS drive_shares(
+  user_key TEXT NOT NULL, src_id TEXT NOT NULL, sig TEXT NOT NULL, dst_perm_id TEXT NOT NULL,
+  PRIMARY KEY(user_key, src_id, sig));
 """
+
+_DRIVE_COLS = ("dst_id", "kind", "src_version", "src_modified", "md5", "src_parent", "placed", "share_fp",
+               "state", "reason")
 
 
 class Ledger:
@@ -113,7 +125,7 @@ class Ledger:
 
     def failures(self, user_key):
         out: dict[str, int] = {}
-        for table in ("messages", "events", "contacts"):
+        for table in ("messages", "events", "contacts", "drive_items"):
             for reason, n in self._r(
                     f"SELECT COALESCE(reason,'unknown'), COUNT(*) FROM {table} "
                     "WHERE user_key=? AND state='failed' GROUP BY 1", (user_key,)):
@@ -177,3 +189,34 @@ class Ledger:
     def get_meta(self, user_key, name):
         r = self._r("SELECT value FROM meta WHERE user_key=? AND name=?", (user_key, name))
         return r[0][0] if r else None
+
+    # drive
+    def drive_rows(self, user_key) -> dict[str, dict]:
+        cols = ("user_key", "src_id") + _DRIVE_COLS
+        return {r[1]: dict(zip(cols, r)) for r in self._r(
+            f"SELECT {','.join(cols)} FROM drive_items WHERE user_key=?", (user_key,))}
+
+    def set_drive(self, user_key, src_id, **cols) -> None:
+        """Upsert; columns not given keep their value (a new row takes the defaults)."""
+        if not set(cols) <= set(_DRIVE_COLS):
+            raise ValueError("unknown drive column")
+        names = ",".join(("user_key", "src_id") + tuple(cols))
+        marks = ",".join("?" * (2 + len(cols)))
+        update = ",".join(f"{c}=excluded.{c}" for c in cols) or "src_id=src_id"
+        self._w(f"INSERT INTO drive_items({names}) VALUES({marks}) "
+                f"ON CONFLICT(user_key,src_id) DO UPDATE SET {update}", (user_key, src_id, *cols.values()))
+
+    def dst_folder(self, src_folder_id) -> str | None:
+        r = self._r("SELECT dst_id FROM drive_items WHERE src_id=? AND kind='folder' AND state='done' "
+                    "AND dst_id!='' LIMIT 1", (src_folder_id,))
+        return r[0][0] if r else None
+
+    def drive_shares(self, user_key, src_id) -> dict[str, str]:
+        return dict(self._r("SELECT sig, dst_perm_id FROM drive_shares WHERE user_key=? AND src_id=?",
+                            (user_key, src_id)))
+
+    def add_drive_share(self, user_key, src_id, sig, dst_perm_id) -> None:
+        self._w("INSERT OR REPLACE INTO drive_shares VALUES(?,?,?,?)", (user_key, src_id, sig, dst_perm_id))
+
+    def drop_drive_share(self, user_key, src_id, sig) -> None:
+        self._w("DELETE FROM drive_shares WHERE user_key=? AND src_id=? AND sig=?", (user_key, src_id, sig))

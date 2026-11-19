@@ -190,3 +190,51 @@ def test_failures_include_failed_contacts_not_gone(tmp_path):
     led.set_contact("u001", "people/c3", "people/d3", "e3", "done")
     led.set_contact("u002", "people/c4", "", "e4", "failed", "http_500")
     assert led.failures("u001") == {"http_400": 1}
+
+
+def test_drive_rows_roundtrip(tmp_path):
+    led = make(tmp_path)
+    led.set_drive("u001", "s1", dst_id="d1", kind="folder", src_version="3", src_modified="t", md5="m",
+                  src_parent="p", placed=0, share_fp="fp", state="done", reason=None)
+    row = led.drive_rows("u001")["s1"]
+    assert row == {"user_key": "u001", "src_id": "s1", "dst_id": "d1", "kind": "folder", "src_version": "3",
+                   "src_modified": "t", "md5": "m", "src_parent": "p", "placed": 0, "share_fp": "fp",
+                   "state": "done", "reason": None}
+    assert led.drive_rows("u002") == {}
+
+
+def test_set_drive_partial_update_keeps_columns(tmp_path):
+    led = make(tmp_path)
+    led.set_drive("u001", "s1", kind="file", md5="m", state="pending")
+    led.set_drive("u001", "s1", state="failed", reason="http_500")
+    row = led.drive_rows("u001")["s1"]
+    assert (row["kind"], row["md5"], row["state"], row["reason"], row["placed"]) == ("file", "m", "failed",
+                                                                                    "http_500", 1)
+    with pytest.raises(ValueError):
+        led.set_drive("u001", "s1", name="x")
+
+
+def test_dst_folder_across_users(tmp_path):
+    led = make(tmp_path)
+    led.set_drive("u001", "F", dst_id="D", kind="folder", state="pending")
+    assert led.dst_folder("F") is None
+    led.set_drive("u001", "F", state="done")
+    led.set_drive("u002", "G", dst_id="E", kind="file", state="done")
+    assert led.dst_folder("F") == "D" and led.dst_folder("G") is None
+
+
+def test_drive_shares_add_drop(tmp_path):
+    led = make(tmp_path)
+    led.add_drive_share("u001", "s1", "sigA", "p1")
+    led.add_drive_share("u001", "s1", "sigB", "p2")
+    assert led.drive_shares("u001", "s1") == {"sigA": "p1", "sigB": "p2"}
+    led.drop_drive_share("u001", "s1", "sigA")
+    assert led.drive_shares("u001", "s1") == {"sigB": "p2"} and led.drive_shares("u002", "s1") == {}
+
+
+def test_failures_include_drive(tmp_path):
+    led = make(tmp_path)
+    led.set_drive("u001", "s1", state="failed", reason="http_500")
+    led.set_drive("u001", "s2", state="done")
+    led.mark_failed("u001", "m1", "http_500")
+    assert led.failures("u001") == {"http_500": 2}
