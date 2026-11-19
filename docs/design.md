@@ -327,8 +327,9 @@ These were made while building the tool. Approved sections above are unchanged.
   mismatch. The welcome-mail allowance only covers extra messages.
 - The inventory file must have exactly the columns `type,address,parent`.
   Anything else stops `verify` with a reason.
-- Failed calendar shares are counted (`acl_failed`) and caught by the
-  sharing check.
+- Failed calendar shares are counted internally in the ledger (`acl_failed`,
+  not shown in output) and are caught by the sharing check, which compares
+  the source's sharing rules with the destination's.
 - Unsupported calendar entry types (out-of-office, focus time, working
   location, birthdays) are reported, not treated as failures.
 - `--help` is disabled; every output is one JSON line.

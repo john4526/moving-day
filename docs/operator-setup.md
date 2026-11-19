@@ -88,7 +88,9 @@ agent must not.**
 
 4. Install the tool in a virtual environment (a private copy of Python and
    the tool's libraries) at `/Users/wsmigrate/venv`. Copy the project folder
-   to a place `wsmigrate` can read (for example a temporary folder), then:
+   to a place `wsmigrate` can read (for example a temporary folder). The
+   temporary copy must not contain keys, CSV files, the ledger or reports,
+   and must be deleted once the install is finished. Then:
 
    ```
    sudo -u wsmigrate python3 -m venv /Users/wsmigrate/venv
@@ -121,6 +123,12 @@ agent must not.**
 This sudoers line lets Jonathon's Mac user run exactly one program, as
 `wsmigrate`, and nothing else. Replace `jonathon` with the short name of
 Jonathon's Mac user. The agent runs under this user.
+
+For the file protection to hold, that Mac user must **not** be an
+administrator and must **not** have passwordless sudo for anything else. It
+must never be given Jonathon's password or the `wsmigrate` password. If it
+can become root or the `wsmigrate` user in any other way, it can read the
+keys and the data.
 
 Edit it with `visudo`, which checks the syntax before saving. A typo in a
 sudoers file can lock you out of `sudo`.
@@ -169,9 +177,10 @@ max_existing    = 5                            # optional, default 5
 
 ## 5. The mapping file
 
-CSV at the `mapping_file` path. The header must be exactly these four column
-names. The key (`u001`, `u002`, ...) is the user's permanent name inside the
-tool. Keys, source addresses and destination addresses must each be unique.
+CSV at the `mapping_file` path. The header must contain the four column names
+below. Extra columns are ignored. The key is the letter `u` followed by
+exactly three digits (`u001`, `u002`, ...). It is the user's permanent name
+inside the tool. Keys, source addresses and destination addresses must each be unique.
 Batch names are free text, for example `mock` or `all`.
 
 ```
@@ -189,7 +198,10 @@ CSV at the `inventory_file` path, written by the parent organisation's
 administrator. The header must be exactly `type,address,parent`. Anything
 else stops `verify` with a reason. Types are `user`, `group`, `member` and
 `alias`. Use source-side addresses; the tool swaps the domain for
-`dest_domain` when it checks the destination.
+`dest_domain` when it checks the destination. The check matches by the part
+before the `@`, so it only works when a person's source and destination
+addresses share that part (`alex@` on both sides). A row with any other type
+stops `verify` with the reason `bad_type`.
 
 - `user`: `parent` is empty.
 - `group`: `parent` is empty.
@@ -229,22 +241,29 @@ else.
   run `verify` for a batch while `copy` is running on it.
 - **Exit codes:**
   - `0`: success.
-  - `1`: finished, but with failures (or interrupted).
-  - `2`: refused to run (bad arguments, no config, bad mapping, unknown
-    batch, destination not empty, already running).
-- **On exit code 2, or any failed check, the agent stops and asks
-  Jonathon.** It does not retry or work around it.
+  - `1`: finished with failures, interrupted, or an unexpected error. A bad
+    or missing config file (for example a `report_dir` with a space) gives
+    exit 1 with a reason such as `internal_ValueError` or
+    `internal_FileNotFoundError`.
+  - `2`: refused to run (bad arguments, no config option, bad mapping,
+    unknown batch, destination not empty, already running).
+- **On any exit code other than 0 the agent stops and asks Jonathon.** For
+  `verify`, `"passed": false` or `failed_checks` above 0 also means stop. The
+  agent does not retry or work around it.
 
 ### What the output means
 
 Output uses user keys (`u001`), never addresses. Some fields you may see:
 
-- `acl_failed`: calendar shares that failed to copy in this run. The
-  sharing check in `verify` catches them.
 - `outside_shares`: shares to people who are not in the mapping file (for
   example parent-organisation staff). They are kept as they are and counted.
-- `no_date_header`: messages with no Date header. They are copied but will
-  show a different date.
+
+Two counters are kept internally in the ledger and are **not shown in any
+output**: `acl_failed` (calendar shares that failed to copy) and
+`no_date_header` (messages with no Date header; they are copied but show a
+different date). A failed share is still caught, because the `verify` sharing
+check compares the source's sharing rules with the destination's and counts
+any that are missing.
 
 ### Where the report is
 
@@ -267,10 +286,12 @@ You run the wsmigrate migration tool. Follow these rules exactly.
    COMMAND is one of: check, copy, status, verify. Nothing else.
 2. Never read, list, copy or open any file under /Users/wsmigrate.
 3. Never edit sudoers, file permissions, users or any Mac security setting.
+   Never ask for, use or store any password. Your Mac user is not an
+   administrator and must stay that way.
 4. Never run a second wsmigrate process while one is running.
-5. Exit code 0 is success, 1 is finished with failures, 2 is refused to run.
-   On exit code 2, or on any failed check or "ok": false, stop and ask
-   Jonathon. Do not retry and do not work around it.
+5. Exit code 0 is success. On any other exit code, stop and ask Jonathon.
+   For verify, also stop and ask if "passed" is false or "failed_checks" is
+   above 0. Do not retry and do not work around it.
 6. Report to Jonathon only what the tool prints (JSON with user keys such as
    u001). Never guess at addresses or content.
 7. Do not run "copy" or "verify" for a real batch until Jonathon says so.
