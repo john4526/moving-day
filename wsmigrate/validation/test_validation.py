@@ -16,6 +16,7 @@ EXPECTED = {
     "test_calendar_sharing": "0 missing shares",
     "test_calendar_events_missing": "0 missing events",
     "test_nothing_left_failed": "0 failed",
+    "test_carried_over_notes": "for information",
 }
 
 
@@ -105,3 +106,19 @@ def test_freeze_held(ledger, user, request, record_property):
         request.applymarker(pytest.mark.xfail(strict=False, reason="changes expected"))
     _show(record_property, f"history id at end: {start} (same as at start)", f"history id at end: {end}")
     assert start == end, "source mailbox changed during the copy"
+
+
+def test_carried_over_notes(mail, ledger, user, record_property):
+    """For information (always passes): threads on each side (a difference means split threads), messages with
+    no Date header, calendar entries of unsupported types not copied, shares outside our domain, shares that
+    failed, and calendars shared with the user that were skipped."""
+    def meta(name):
+        return ledger.get_meta(user.key, name) or "not recorded"
+
+    notes = [f"threads: {mail.threads_src} on source, {mail.threads_dst} on destination",
+             f"messages with no Date header: {meta('no_date_header')}",
+             "calendar entries of unsupported types not copied: "
+             f"{ledger.failures(user.key).get('unsupported_event_type', 0)}",
+             f"outside shares: {meta('outside_shares')}", f"failed shares: {meta('acl_failed')}",
+             f"shared calendars skipped: {meta('shared_calendars_skipped')}"]
+    _show(record_property, EXPECTED["test_carried_over_notes"], "\n".join(notes))

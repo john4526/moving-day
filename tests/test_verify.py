@@ -6,11 +6,13 @@ import pytest
 from fakes import make_apis
 
 from wsmigrate import cli, runtime
+from wsmigrate.ledger import Ledger
 
 VALIDATION_TESTS = {
     "test_mapping_valid", "test_inventory_present", "test_mail_none_missing", "test_mail_no_duplicates",
     "test_mail_no_foreign_messages", "test_mail_label_counts", "test_calendar_counts",
     "test_calendar_sharing", "test_calendar_events_missing", "test_nothing_left_failed", "test_freeze_held",
+    "test_carried_over_notes",
 }
 
 
@@ -159,7 +161,7 @@ def test_session_fixture_failure_keeps_condition_on_every_row(env, capfd, monkey
     code, out, cap = run(capfd, "verify", "--batch", "b1", "--config", cfg)
     assert code == 1 and len(out) == 1 and cap.err == ""
     rows, _ = report_rows(tmp / "r" / out[0]["report"])
-    assert len(rows) == 20 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
+    assert len(rows) == 22 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
     uses_apis = [t for t in rows if "_mail_" in t or "_calendar_" in t or "inventory" in t]
     assert len(uses_apis) == 15 and all(rows[t][3] == "error: http_403" for t in uses_apis)
     assert rows["test_validation.py::test_mail_none_missing[u001]"][2] == "0 missing"  # static expected
@@ -189,3 +191,23 @@ def test_plain_skip_is_not_ok_but_xfail_is():
     rec.pytest_runtest_logreport(R(nodeid="a", failed=False, skipped=True))
     rec.pytest_runtest_logreport(R(nodeid="b", failed=False, skipped=True, wasxfail="changes expected"))
     assert rec.ok == {"a": False, "b": True}
+
+
+def test_carried_over_notes_shows_counts_for_information(env, capfd):
+    apis, cfg, tmp = env
+    apis.src_gmail.add_message("a@old.org", b"Subject: s\r\nMessage-ID: <77@x>\r\n\r\nb\r\n", ["INBOX"])  # no Date
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    led = Ledger(str(tmp / "l.db"))
+    led.set_event("u001", "primary", "e9", "", "t", "failed", "unsupported_event_type")
+    for name, value in (("outside_shares", "2"), ("acl_failed", "1"), ("shared_calendars_skipped", "3")):
+        led.set_meta("u001", name, value)
+    led.close()
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 0 and check(out, "test_carried_over_notes", "u001")[0]["ok"] is True
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    result, _, expected, actual = rows["test_validation.py::test_carried_over_notes[u001]"][:4]
+    assert (result, expected) == ("Passed", "for information")
+    assert actual.splitlines() == [
+        "threads: 3 on source, 3 on destination", "messages with no Date header: 1",
+        "calendar entries of unsupported types not copied: 1", "outside shares: 2", "failed shares: 1",
+        "shared calendars skipped: 3"]
