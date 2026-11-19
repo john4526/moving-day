@@ -431,6 +431,30 @@ copy it somewhere he can read). The report shows the mapped user addresses,
 and for every check and every user the condition, the expected result and
 the actual result. It never contains mail content.
 
+### Models and token limits
+
+The agent only types commands; `movingday` does the copying. If the agent's
+person runs out of tokens, nothing is lost: a background `copy` keeps
+running, re-running it resumes, and a person can type the same commands by
+hand. The risk is lost time during the freeze, not lost data.
+
+- **Model.** Running commands and reading JSON: Sonnet at low effort.
+  Checking on a running copy: Haiku, or a person typing `status`. Diagnosing
+  a failure or a failed `verify` is Jonathon's job, in his own session, not
+  the agent's.
+- **Don't poll.** Start `copy` in the background, then check `status` about
+  once an hour at most, or end the turn and come back later.
+- **New session per phase:** scan, Drive pre-copy, freeze copy, verify.
+  Carry only the last `status` line into the next session.
+- **Keep `wsagent`'s Claude bare.** No plugins or connectors, just the
+  shell. Each connected tool adds to the cost of every turn.
+- **Time the freeze around limits.** Start the freeze copy just after the
+  operator's usage limit resets. For the cutover week, consider a higher
+  plan, or an API key with a spending cap as a backup.
+- **Fallback card.** The operator keeps the exact `status` and `verify`
+  lines from this section on paper, so a token limit means a pause, not a
+  stall.
+
 ## 8. Standing instructions for the agent
 
 Paste this block into the agent's instructions.

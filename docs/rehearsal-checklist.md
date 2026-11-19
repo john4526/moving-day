@@ -179,3 +179,8 @@ Use the commands from `docs/operator-setup.md`, section 7.
   the window. If not, the design's fallback is a decision for Jonathon.
 - [ ] 7. Decide what happens to the volunteers' trial copy (keep and top up,
   or delete and recreate the destination users).
+- [ ] 8. Record how much of the operator's Claude usage the mock took
+  (see "Models and token limits" in `docs/operator-setup.md`). Scale it to
+  the real cutover and confirm it fits the operator's plan: ______
+- [ ] 9. The operator runs one `status` and one `verify` by hand from the
+  fallback card, with no agent.
