@@ -266,3 +266,19 @@ def test_group_calendar_owned_by_two_users_copied_once(cal):
     for key, su, du, n in ((U, S, D, 2), ("u002", P, PD, 1)):
         r = compare_calendar(a.src_cal, a.dst_cal, led, MAP, key, su, du, "y.org")
         assert (r.calendars_src, r.calendars_dst, r.events_missing, r.acl_missing) == (n, n, 0, 0)
+
+
+def test_compare_calendar_does_not_claim_and_later_copy_still_can(cal):
+    a, led = cal
+    P, PD = "pal@x.org", "pal@y.org"
+    a.src_cal.add_calendar(P, P, primary=True)
+    a.dst_cal.add_calendar(PD, PD, primary=True)
+    for u in (S, P):
+        a.src_cal.add_calendar(u, G, summary="Team")
+        a.src_cal.add_event(u, G, {"summary": "q", "id": "g1"})
+    assert cmp_cal(a, led).calendars_src == 2  # primary + unclaimed group calendar
+    assert led._r("SELECT * FROM calendar_claims") == []
+    copy_calendars(a.src_cal, a.dst_cal, led, MAP, "u002", P, PD, "y.org")  # the other co-manager goes first
+    assert len(a.dst_cal.cals[PD]) == 2
+    assert led.calendar_claimant(G) == "u002"
+    assert cmp_cal(a, led).calendars_src == 1  # claimed by someone else: no longer ours

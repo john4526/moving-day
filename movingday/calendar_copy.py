@@ -117,16 +117,19 @@ def _sharing(src, dst, mapping, src_user, dst_user, dest_domain, src_cal, dst_ca
     return failed
 
 
-def select_calendars(src, ledger, user_key, src_user):
+def select_calendars(src, ledger, user_key, src_user, claim: bool = True):
     """(calendars this user copies, owner-role calendars skipped). Copied: the primary calendar, and each
     group calendar the user owns or manages, by the one user who claims it first. "owner" is also reported
-    for other people's calendars shared with "manage sharing"; those and resource calendars are skipped."""
+    for other people's calendars shared with "manage sharing"; those and resource calendars are skipped.
+    claim=False only reads the claims (for comparisons): an unclaimed calendar counts as this user's."""
     out, skipped = [], 0
     for cal in src.list_calendars(src_user):
         if cal["primary"]:
             out.append(cal)
         elif cal["accessRole"] == "owner":
-            if cal["id"].endswith(GROUP_SUFFIX) and ledger.claim_calendar(cal["id"], user_key):
+            if cal["id"].endswith(GROUP_SUFFIX) and (
+                    ledger.claim_calendar(cal["id"], user_key) if claim
+                    else ledger.calendar_claimant(cal["id"]) in (None, user_key)):
                 out.append(cal)
             else:
                 skipped += 1

@@ -72,7 +72,7 @@ def compare_calendar(src, dst, ledger, mapping, user_key, src_user, dst_user, de
     dst_list = dst.list_calendars(dst_user)
     dst_cals = {c["id"] for c in dst_list}
     dst_has_primary = any(c["primary"] for c in dst_list)
-    for cal in select_calendars(src, ledger, user_key, src_user)[0]:
+    for cal in select_calendars(src, ledger, user_key, src_user, claim=False)[0]:
         key = "primary" if cal["primary"] else cal["id"]
         r.calendars_src += 1
         skipped = ledger.failed_event_ids(user_key, key, "unsupported_event_type")

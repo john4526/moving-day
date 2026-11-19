@@ -125,6 +125,11 @@ class Ledger:
         self._w("INSERT OR IGNORE INTO calendar_claims VALUES(?,?)", (src_cal, user_key))
         return self._r("SELECT user_key FROM calendar_claims WHERE src_cal=?", (src_cal,))[0][0] == user_key
 
+    def calendar_claimant(self, src_cal) -> str | None:
+        """Read-only: who has claimed this shared calendar, if anyone."""
+        rows = self._r("SELECT user_key FROM calendar_claims WHERE src_cal=?", (src_cal,))
+        return rows[0][0] if rows else None
+
     def event_rows(self, user_key, src_cal):
         return {r[0]: (r[1], r[2], r[3]) for r in self._r(
             "SELECT src_event, dst_event, updated, state FROM events WHERE user_key=? AND src_cal=?",
