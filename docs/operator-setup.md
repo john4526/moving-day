@@ -29,9 +29,12 @@ be kept from the keys or the data.
 ## Before anything else: the scan
 
 Before any migration, run one read-only scan across every account. It plans
-the rehearsal, the mock and the cutover. It needs only the source half of
-steps 1 to 5 (the source service account, the Mac users, a config file and a
-mapping file); the destination does not need to exist yet.
+the rehearsal, the mock and the cutover. Complete steps
+1 to 6 first (including the sudoers line in step 3 and the file owners and
+modes in step 6, or the tool refuses with `untrusted_file`). The config file
+needs every field, so use placeholder values for the destination key file,
+`dest_admin` and `dest_domain`. With `--source-only` the destination key file
+is never opened, and the destination does not need to exist yet.
 
 - **Credentials:** the source service account only (read-only scopes). The
   destination key file is not opened.
