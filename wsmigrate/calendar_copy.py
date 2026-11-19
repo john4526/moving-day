@@ -32,6 +32,7 @@ def _events(src, dst, ledger, user_key, src_user, dst_user, key, src_cal, dst_ca
                 dst.delete_event(dst_user, dst_cal, did, **NONE)
         except ApiError as e:
             if e.reason not in ("http_404", "http_410"):
+                ledger.set_event(user_key, key, sid, did, rows[sid][1], "failed", e.reason)
                 st.events_failed += 1
                 continue
         ledger.drop_event(user_key, key, sid)
@@ -67,7 +68,9 @@ def _events(src, dst, ledger, user_key, src_user, dst_user, key, src_cal, dst_ca
             st.events_failed += 1
 
 
-def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st):
+def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st) -> int:
+    """Returns the number of rules whose insert failed."""
+    failed = 0
     have = {(r["role"], r["scope"]["type"], r["scope"].get("value", "").lower())
             for r in dst.list_acl(dst_user, dst_cal)}
     for r in src.list_acl(src_user, src_cal):
@@ -78,10 +81,10 @@ def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st):
             mapped = mapping.dest_for(val)
             if mapped:
                 val = mapped
-            else:
-                st.outside_shares += 1
             if val.lower() == dst_user.lower():
                 continue
+            if not mapped:
+                st.outside_shares += 1
         sig = (r["role"], typ, (val or "").lower())
         if sig in have:
             continue
@@ -89,14 +92,17 @@ def _sharing(src, dst, mapping, src_user, dst_user, src_cal, dst_cal, st):
         try:
             dst.insert_acl(dst_user, dst_cal, {"role": r["role"], "scope": scope}, send_notifications=False)
         except ApiError:
+            failed += 1
             continue
         have.add(sig)
         st.acl_copied += 1
+    return failed
 
 
 def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user) -> CalStats:
     st = CalStats()
     cmap = ledger.cal_map(user_key)
+    acl_failed = 0
     for cal in src.list_calendars(src_user):
         if cal["accessRole"] != "owner":
             continue
@@ -106,6 +112,7 @@ def copy_calendars(src, dst, ledger, mapping, user_key, src_user, dst_user) -> C
             cmap[key] = "primary" if cal["primary"] else dst.create_calendar(dst_user, cal["summary"], cal["timeZone"])
             ledger.set_cal(user_key, key, cmap[key])
         _events(src, dst, ledger, user_key, src_user, dst_user, key, cal["id"], cmap[key], st)
-        _sharing(src, dst, mapping, src_user, dst_user, cal["id"], cmap[key], st)
+        acl_failed += _sharing(src, dst, mapping, src_user, dst_user, cal["id"], cmap[key], st)
     ledger.set_meta(user_key, "outside_shares", str(st.outside_shares))
+    ledger.set_meta(user_key, "acl_failed", str(acl_failed))
     return st

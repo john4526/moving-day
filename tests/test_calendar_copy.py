@@ -133,8 +133,9 @@ def test_unmapped_share_kept_and_counted(env):
 def test_share_resolving_to_dst_user_skipped(env):
     a, led = env
     a.src_cal.add_calendar(S, "sec", summary="s")
-    a.src_cal.add_acl(S, "sec", {"role": "writer", "scope": {"type": "user", "value": S}})
-    assert run(env).acl_copied == 0
+    a.src_cal.add_acl(S, "sec", {"role": "writer", "scope": {"type": "user", "value": D}})
+    st = run(env)
+    assert st.acl_copied == 0 and st.outside_shares == 0
 
 
 def test_no_notifications_ever(env):
@@ -208,3 +209,30 @@ def test_ledger_holds_no_content(env):
     run(env)
     dump = "\n".join(led.db.iterdump())
     assert "SECRETSUMMARY" not in dump and "who@z.com" not in dump and S not in dump
+
+
+def test_failed_acl_insert_counted_and_loop_continues(env):
+    a, led = env
+    a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "user", "value": "pal@x.org"}})
+    a.src_cal.add_acl(S, S, {"role": "reader", "scope": {"type": "domain", "value": "x.org"}})
+    a.dst_cal.fail_next("insert_acl", ApiError("http_403", False))
+    st = run(env)
+    assert st.acl_copied == 1
+    assert led.get_meta(U, "acl_failed") == "1"
+    assert a.dst_cal.cals[D][D]["acl"] == [{"role": "reader", "scope": {"type": "domain", "value": "x.org"}}]
+    assert sum(m == "insert_acl" for m, _ in a.dst_cal.calls) == 2
+    run(env)  # retried next run
+    assert led.get_meta(U, "acl_failed") == "0" and len(a.dst_cal.cals[D][D]["acl"]) == 2
+
+
+def test_failed_delete_recorded_and_retried(env):
+    a, led = env
+    eid = a.src_cal.add_event(S, S, {"summary": "x"})
+    run(env)
+    del a.src_cal.cals[S][S]["events"][eid]
+    a.dst_cal.fail_next("delete_event", ApiError("http_500", False))
+    assert run(env).events_failed == 1
+    assert led.failures(U) == {"http_500": 1}
+    assert led.event_rows(U, "primary")[eid][2] == "failed"
+    assert run(env).events_removed == 1
+    assert led.event_rows(U, "primary") == {} and dst_events(a) == {}
