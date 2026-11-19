@@ -1,4 +1,6 @@
+import html
 import json
+import re
 
 import pytest
 from fakes import make_apis
@@ -45,6 +47,14 @@ def run(capfd, *argv):
     code = cli.main(list(argv))
     cap = capfd.readouterr()
     return code, [json.loads(l) for l in cap.out.splitlines()], cap
+
+
+def report_rows(path):
+    """{test id: [cell text]} from pytest-html's embedded data, plus the unescaped page text."""
+    text = html.unescape(path.read_text())
+    blob = json.loads(html.unescape(re.search(r'data-jsonblob="([^"]*)"', path.read_text()).group(1)))
+    strip = lambda c: html.unescape(re.sub(r"<[^>]+>", "", c))
+    return {tid: [strip(c) for c in runs[-1]["resultsTableRow"]] for tid, runs in blob["tests"].items()}, text
 
 
 def check(out, name, user=None):
@@ -118,3 +128,21 @@ def test_unknown_batch(env, capfd):
     for argv in (["--batch", "nope"], ["--batch", ""]):
         code, out, _ = run(capfd, "verify", *argv, "--config", cfg)
         assert code == 2 and out == [{"command": "verify", "ok": False, "reason": "unknown_batch"}]
+
+
+def test_report_shows_condition_expected_and_actual(env, capfd):
+    apis, cfg, tmp = env
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    apis.dst_gmail.messages["a@new.org"].popitem()
+    _, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    rows, text = report_rows(tmp / "r" / out[0]["report"])
+    assert all(f"<th>{h}</th>" in text for h in ("Condition", "Expected", "Actual"))
+    result, condition, expected, actual = rows["test_validation.py::test_mail_none_missing[u001]"][:4]
+    assert result == "Failed" and condition == "Every source message is present on the destination."
+    assert (expected, actual) == ("0 missing", "1 missing")
+    assert rows["test_validation.py::test_mail_none_missing[u002]"][1:4] == [
+        "Every source message is present on the destination.", "0 missing", "0 missing"]
+    counts = rows["test_validation.py::test_calendar_counts[u001]"]
+    assert counts[2].splitlines() == ["calendars: 1 (same as source)", "events: 1 (same as source)",
+                                      "recurring series: 0 (same as source)", "attendees: 1 (same as source)"]
+    assert counts[3].splitlines() == ["calendars: 1", "events: 1", "recurring series: 0", "attendees: 1"]

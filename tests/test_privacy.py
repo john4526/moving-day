@@ -1,4 +1,6 @@
-from test_verify import env, run  # noqa: F401  (env is a fixture)
+import html
+
+from test_verify import env, report_rows, run  # noqa: F401  (env is a fixture)
 
 MARKER = "zebra7731"
 RAW = (b"From: ZEBRA7731 Person <zebra7731@corr.example>\r\nSubject: ZEBRA7731\r\nMessage-ID: <z@x>\r\n"
@@ -16,7 +18,7 @@ def _run_all(env, capfd):
         code, lines, cap = run(capfd, *argv, "--config", cfg)
         out, err = out + cap.out, err + cap.err
         report = lines[0].get("report", report)
-    return out, err, (tmp / "l.db").read_bytes(), (tmp / "r" / report).read_text()
+    return out, err, (tmp / "l.db").read_bytes(), html.unescape((tmp / "r" / report).read_text())
 
 
 def test_marker_never_leaks(env, capfd):
@@ -30,3 +32,19 @@ def test_report_shows_user_addresses_but_no_correspondents(env, capfd):
     *_, report = _run_all(env, capfd)
     assert "a@old.org" in report and "a@new.org" in report and "b@new.org" in report
     assert "corr.example" not in report
+
+
+class _Denied(Exception):
+    reason = "http_403"
+
+
+def test_api_error_text_never_reaches_report(env, capfd):
+    apis, cfg, tmp = env
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    apis.dst_gmail.fail_next("list_messages", _Denied("ZEBRA7731 zebra7731@corr.example"))
+    code, out, cap = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    path = tmp / "r" / out[0]["report"]
+    rows, text = report_rows(path)
+    assert code == 1 and MARKER not in (text + cap.out + cap.err).lower() and "corr.example" not in text
+    row = rows["test_validation.py::test_mail_none_missing[u001]"]
+    assert row[0] == "Error" and row[4].endswith("::setup") and row[3] == "error: http_403"

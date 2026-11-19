@@ -8,6 +8,7 @@ from wsmigrate.compare import compare_calendar, compare_mail
 from wsmigrate.config import load_config
 from wsmigrate.ledger import Ledger
 from wsmigrate.mapping import load_mapping
+from wsmigrate.safeout import reason_for
 
 
 def pytest_addoption(parser):
@@ -36,6 +37,39 @@ def pytest_html_results_summary(prefix, summary, postfix, session):
                    for u in _users(session.config))
     prefix.append("<h2>Users in this batch</h2><table><tr><th>User</th><th>Source address</th>"
                   f"<th>Destination address</th></tr>{rows}</table>")
+
+
+_COLUMNS = ("condition", "expected", "actual")
+
+
+def pytest_html_results_table_header(cells):
+    cells[1:1] = [f"<th>{c.title()}</th>" for c in _COLUMNS]
+
+
+def pytest_html_results_table_row(report, cells):
+    """Condition, expected and actual from the check's user_properties (counts and plain values only)."""
+    props = dict(report.user_properties)
+    if report.failed and "actual" not in props:
+        props["actual"] = "not measured: the check could not run"
+    cells[1:1] = [f'<td class="col-{c}" style="white-space:pre-line">{html.escape(str(props.get(c, "")))}</td>'
+                  for c in _COLUMNS]
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Any error (in a check or a fixture) is reported as its reason only, never its exception text."""
+    report = yield
+    exc = call.excinfo.value if call.excinfo else None
+    if report.failed and isinstance(exc, Exception) and not isinstance(exc, AssertionError):
+        report.longrepr = f"error: {reason_for(exc)}"
+        report.user_properties = [*report.user_properties, ("actual", report.longrepr)]
+    return report
+
+
+@pytest.fixture(autouse=True)
+def _condition(request, record_property):
+    """Each check's docstring is its plain-English condition, recorded before any fixture can fail."""
+    record_property("condition", " ".join(request.function.__doc__.split()))
 
 
 @pytest.fixture(scope="session")
