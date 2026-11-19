@@ -8,7 +8,9 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
-from wsmigrate import calendar_copy, mail, runtime
+import pytest
+
+from wsmigrate import calendar_copy, mail, runtime, validation
 from wsmigrate.config import load_config
 from wsmigrate.ledger import Ledger
 from wsmigrate.mapping import MappingError, load_mapping
@@ -24,11 +26,13 @@ class _Parser(argparse.ArgumentParser):
 def _parser():
     p = _Parser(prog="wsmigrate", add_help=False)
     sub = p.add_subparsers(dest="command", required=True)
-    for name in ("check", "copy", "status"):
+    for name in ("check", "copy", "status", "verify"):
         s = sub.add_parser(name, add_help=False)
         s.add_argument("--config", default=os.environ.get("WSMIGRATE_CONFIG"))
         if name != "check":
-            s.add_argument("--batch", required=name == "copy")
+            s.add_argument("--batch", required=name in ("copy", "verify"))
+        if name == "verify":
+            s.add_argument("--expect-changes", action="store_true")
         if name == "copy":
             s.add_argument("--mail", action="store_true")
             s.add_argument("--calendar", action="store_true")
@@ -121,6 +125,47 @@ def _status(config, users):
     return 0
 
 
+class _Recorder:
+    """pytest plugin: one check per test, ok unless any phase failed (an xfail counts as ok)."""
+
+    def __init__(self):
+        self.ok = {}
+
+    def pytest_runtest_logreport(self, report):
+        self.ok[report.nodeid] = self.ok.get(report.nodeid, True) and not report.failed
+
+
+def _verify(config, a):
+    here = os.path.dirname(validation.__file__)
+    name = f"{a.batch}-{time.strftime('%Y%m%d-%H%M%S')}.html"
+    rec = _Recorder()
+    args = [here, "-c", os.devnull, "--rootdir", here, "--batch", a.batch, "--config", a.config,
+            "--html", os.path.abspath(os.path.join(config.report_dir, name)), "--self-contained-html",
+            "--tb=short", "--show-capture=no", "-p", "no:cacheprovider", "-p", "no:logging",
+            "-p", "no:faulthandler"] + (["--expect-changes"] if a.expect_changes else [])
+    # pytest writes at the fd level, so silence fds 1 and 2, not just sys.stdout/stderr
+    sys.stdout.flush(); sys.stderr.flush()
+    saved, streams = (os.dup(1), os.dup(2)), (sys.stdout, sys.stderr)
+    with open(os.devnull, "w") as null:
+        os.dup2(null.fileno(), 1); os.dup2(null.fileno(), 2)
+        sys.stdout = sys.stderr = null
+        try:
+            ret = pytest.main(args, plugins=[rec])
+        finally:
+            sys.stdout, sys.stderr = streams
+            for fd, copy in zip((1, 2), saved):
+                os.dup2(copy, fd); os.close(copy)
+    checks = []
+    for nodeid, ok in rec.ok.items():
+        test, _, user = nodeid.split("::")[-1].rstrip("]").partition("[")
+        checks.append({"name": test, **({"user": user} if user else {}), "ok": ok})
+    failed = sum(not c["ok"] for c in checks)
+    passed = ret == 0 and failed == 0
+    emit({"command": "verify", "batch": a.batch, "passed": passed, "failed_checks": failed,
+          "checks": checks, "report": name})
+    return 0 if passed else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     warnings.simplefilter("ignore")
     try:
@@ -138,6 +183,11 @@ def main(argv: list[str] | None = None) -> int:
         except MappingError as e:
             emit({"command": name, "ok": False, "reason": e.reason, "row": e.row})
             return 2
+        if name == "verify":
+            if not mapping.batch(a.batch):
+                emit({"command": name, "ok": False, "reason": "unknown_batch"})
+                return 2
+            return _verify(config, a)
         users = mapping.batch(a.batch) if getattr(a, "batch", None) else mapping.users
         if name == "check":
             return _check(config, users)

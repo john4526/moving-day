@@ -17,7 +17,7 @@ dependencies = [
 wsmigrate = "wsmigrate.cli:main"
 
 [tool.setuptools]
-packages = ["wsmigrate"]
+packages = ["wsmigrate", "wsmigrate.validation"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
