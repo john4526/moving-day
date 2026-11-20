@@ -243,7 +243,9 @@ max_existing    = 5                            # optional, default 5
 
 - `report_dir` must contain no spaces. The tool refuses to start otherwise.
 - `max_existing` is how many messages a destination mailbox may already hold
-  (Google's welcome mail). More than this and `copy` refuses to run.
+  (Google's welcome mail). More than this and `copy` refuses to run, unless
+  that user's key is listed after `--allow-existing` (see "Earlier
+  transfers" in section 7).
 - `sudo` removes environment variables, so always pass `--config` on the
   command line rather than relying on `MOVINGDAY_CONFIG`.
 
@@ -364,6 +366,26 @@ else.
   batch with `--allow-trash KEY` for that person. It lifts the hold for
   that run only; trashed copies can be restored from the destination trash
   for 30 days. The agent never adds `--allow-trash` on its own.
+
+### Earlier transfers
+
+If mail was already transferred to a destination mailbox by another tool,
+list that user's key after `--allow-existing`. On the first run for that
+user, `copy` matches each earlier copy to its source message by
+Message-ID, sets its labels and read/starred state to the source's, and
+records it as done (`adopted` in the output). Only messages with no earlier
+copy are copied. Nothing earlier is deleted.
+
+- Messages with no Message-ID header can't be matched and are copied
+  again; `verify` reports any resulting duplicates.
+- Earlier copies of mail since deleted on the source stay on the
+  destination. They count as extra mail already there, which `verify`
+  allows.
+- Adopted copies no longer count as "already there", so `verify` catches
+  any further unexpected mail.
+- Check `adopted` against the user's `dst_existing` from `check`: if
+  `adopted` is near 0, the earlier tool did not keep Message-IDs. Stop and
+  ask Jonathon before copying more.
 
 ### What the output means
 

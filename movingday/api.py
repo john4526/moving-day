@@ -162,6 +162,11 @@ class Gmail(_Google):
         )
         return value, m.get("labelIds", [])
 
+    def set_labels(self, user, msg_id, add, remove) -> None:
+        """Destination only: brings an adopted earlier copy's labels in line with the source."""
+        self._call(lambda: self._m(user).messages().modify(
+            userId="me", id=msg_id, body={"addLabelIds": add, "removeLabelIds": remove}))
+
     def insert(self, user, raw, label_ids, thread_id) -> tuple[str, str]:
         body = {"labelIds": label_ids}
         if thread_id is not None:

@@ -265,10 +265,10 @@ def test_one_user_failing_leaves_others_ok(env, capsys, monkeypatch):
     apis, cfg, _ = env
     real = mail.copy_mail
 
-    def sometimes(src, dst, ledger, key, su, du):
+    def sometimes(src, dst, ledger, key, su, du, adopt=False):
         if key == "u001":
             raise RuntimeError("SECRET")
-        return real(src, dst, ledger, key, su, du)
+        return real(src, dst, ledger, key, su, du, adopt)
     monkeypatch.setattr(mail, "copy_mail", sometimes)
     code, out, cap = run(capsys, "copy", "--batch", "b1", "--config", cfg)
     assert code == 1 and "SECRET" not in cap.out + cap.err

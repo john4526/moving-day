@@ -41,6 +41,13 @@ an item says "else", the fallback is named.
 - [ ] Measured messages per second per mailbox with `parallel_users = 4`:
   ______
 - [ ] Insert accepts the system labels `SENT`, `IMPORTANT` and `CATEGORY_*`.
+- [ ] Adopting an earlier transfer: transfer a few messages to a trial
+  mailbox with the tool used for the real earlier transfer, then run
+  `copy --allow-existing KEY`. `adopted` equals the earlier count, nothing
+  is duplicated, and `verify` passes.
+- [ ] `messages.modify` can change `UNREAD`, `STARRED`, `IMPORTANT`,
+  `INBOX` and `CATEGORY_*` on an existing message (the tool leaves `SENT`,
+  `DRAFT` and `CHAT` alone).
 - [ ] Fetching chat messages in raw format works.
 - [ ] Whether Gmail adds its own Message-ID to an inserted message that has
   none.

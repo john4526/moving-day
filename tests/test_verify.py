@@ -355,3 +355,21 @@ def test_drive_in_step_expected_to_differ_with_flag(env, capfd):
     assert rows["test_validation.py::test_drive_in_step[u001]"][3] == "1 changed since copied"
     code, out, _ = run(capfd, "verify", "--batch", "b1", "--expect-changes", "--config", cfg)
     assert code == 0 and check(out, "test_drive_in_step", "u001")[0]["ok"] is True
+
+
+def test_verify_passes_after_adopting_an_earlier_transfer(env, capfd):
+    apis, cfg, _ = env
+    apis.dst_gmail.add_message("a@new.org", raw(0), ["INBOX", "UNREAD"])  # earlier transfer, stale state
+    assert run(capfd, "copy", "--batch", "b1", "--allow-existing", "u001", "--config", cfg)[0] == 0
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 0 and out[0]["passed"] is True
+
+
+def test_adopted_copies_no_longer_count_as_allowed_extras(env, capfd):
+    apis, cfg, _ = env
+    apis.dst_gmail.add_message("a@new.org", raw(0), ["INBOX"])
+    run(capfd, "copy", "--batch", "b1", "--allow-existing", "u001", "--config", cfg)
+    apis.dst_gmail.add_message("a@new.org", raw(99), ["INBOX"])  # not from the source
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1
+    assert check(out, "test_mail_no_foreign_messages", "u001")[0]["ok"] is False

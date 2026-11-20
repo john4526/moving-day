@@ -376,6 +376,22 @@ the scan and the report show how many each person has, for information.
 - People API behaviours not yet confirmed (bulk-create limits, label
   handling, starred) go on the rehearsal checklist.
 
+## Adopting earlier transfers (added 19 November 2026)
+
+Some mailboxes already hold a month-old transfer made with another tool.
+`copy --allow-existing KEY` now adopts it instead of copying everything a
+second time: once per user, each destination message the ledger doesn't
+know is matched to an uncopied source message by Message-ID hash (each
+earlier copy used once), its labels are set to the source's
+(`messages.modify` on the destination only; `SENT`, `DRAFT` and `CHAT` are
+left alone), and it is recorded as done with reason `adopted`. The rest is
+copied as usual and joins the adopted threads.
+
+Validation subtracts adopted copies from the "already there" allowance, so
+the foreign-messages and label checks stay as strict as on an empty
+mailbox. Headerless messages are never adopted. Mail deleted on the source
+since the earlier transfer stays on the destination as an allowed extra.
+
 ## Drive files (added 19 November 2026, approved)
 
 Scope change: Drive files are now in scope (your decision, 19 Nov). This

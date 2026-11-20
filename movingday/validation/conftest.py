@@ -109,7 +109,7 @@ def results(cfg, apis, ledger, mapping):
         if (kind, u.key) not in cache:
             try:
                 if kind == "mail":
-                    pre = int(ledger.get_meta(u.key, "preexisting") or 0)
+                    pre = int(ledger.get_meta(u.key, "preexisting") or 0) - ledger.adopted_count(u.key)
                     cache[kind, u.key] = compare_mail(apis.src_gmail, apis.dst_gmail, u.source, u.destination, pre)
                 elif kind == "contacts":
                     cache[kind, u.key] = compare_contacts(

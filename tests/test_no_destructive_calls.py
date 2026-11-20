@@ -15,14 +15,20 @@ def _owner(path, n):
 def test_no_delete_trash_or_modify_in_package():
     hits = [(_owner(p, n), l.strip()) for p, lines in SOURCES.items() for n, l in enumerate(lines)
             if re.search(r"\.(delete|trash|untrash|modify|batchDelete|batchModify)\(", l)]
-    kinds = (".events().delete(", ".permissions().delete(")
+    kinds = (".events().delete(", ".permissions().delete(", ".messages().modify(")
     # the one caller of Drive.trash: drive_copy._close_gone, on the destination Drive only
     callers = [(o[0], l) for o, l in hits if o[0] != "api.py"]
     assert callers == [("drive_copy.py", 'dst.trash(dst_user, did)')]
     hits = [h for h in hits if h[0][0] == "api.py"]
-    assert len(hits) == 2
+    assert len(hits) == 3
     assert {(o, next(k for k in kinds if k in l)) for o, l in hits} == {
-        (("api.py", "Calendar", "delete_event"), kinds[0]), (("api.py", "Drive", "remove_permission"), kinds[1])}
+        (("api.py", "Calendar", "delete_event"), kinds[0]), (("api.py", "Drive", "remove_permission"), kinds[1]),
+        (("api.py", "Gmail", "set_labels"), kinds[2])}
+
+
+def test_gmail_set_labels_only_on_the_destination():
+    calls = [l.strip() for lines in SOURCES.values() for l in lines if "set_labels(" in l and "def " not in l]
+    assert calls == ["dst.set_labels(dst_user, mid, add, remove)"]
 
 
 def test_trashed_true_only_in_drive_trash():

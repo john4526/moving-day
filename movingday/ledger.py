@@ -90,6 +90,23 @@ class Ledger:
             "dst_id=excluded.dst_id, dst_thread=excluded.dst_thread",
             (user_key, src_id, dst_id, dst_thread))
 
+    def mark_adopted(self, user_key, src_id, src_thread, msgid_hash, dst_id, dst_thread):
+        """A copy an earlier transfer left in the destination now stands for this source message."""
+        self._w(
+            "INSERT INTO messages(user_key,src_id,src_thread,dst_id,dst_thread,msgid_hash,state,reason) "
+            "VALUES(?,?,?,?,?,?,'done','adopted') ON CONFLICT(user_key,src_id) DO UPDATE SET state='done', "
+            "reason='adopted', dst_id=excluded.dst_id, dst_thread=excluded.dst_thread, "
+            "msgid_hash=excluded.msgid_hash WHERE messages.state!='done'",
+            (user_key, src_id, src_thread, dst_id, dst_thread, msgid_hash))
+
+    def adopted_count(self, user_key):
+        return self._r("SELECT COUNT(*) FROM messages WHERE user_key=? AND state='done' AND reason='adopted'",
+                       (user_key,))[0][0]
+
+    def done_dst_ids(self, user_key):
+        return {r[0] for r in self._r(
+            "SELECT dst_id FROM messages WHERE user_key=? AND state='done'", (user_key,))}
+
     def mark_failed(self, user_key, src_id, reason):
         self._w(
             "INSERT INTO messages(user_key,src_id,state,reason) VALUES(?,?,'failed',?) "

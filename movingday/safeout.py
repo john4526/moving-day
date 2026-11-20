@@ -4,7 +4,7 @@ import re
 import sys
 
 ALLOWED_KEYS = frozenset(
-    "command batch user ok reason row found copied skipped failed remaining pending "
+    "command batch user ok reason row found copied adopted skipped failed remaining pending "
     "src_messages dst_existing calendars events_copied events_updated events_removed "
     "events_failed acl_copied outside_shares no_date_header threads_src threads_dst "
     "users own_calendars delegated_calendars team_calendars summary total_messages largest_mailbox "

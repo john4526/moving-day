@@ -61,7 +61,7 @@ def test_mail_no_duplicates(mail, record_property):
 
 def test_mail_no_foreign_messages(mail, ledger, user, record_property):
     """The destination holds no messages other than the copies and the mail it already had before the copy."""
-    pre = int(ledger.get_meta(user.key, "preexisting") or 0)
+    pre = int(ledger.get_meta(user.key, "preexisting") or 0) - ledger.adopted_count(user.key)
     _show(record_property, f"at most {pre} extra (already there before the copy)", f"{mail.extra} extra")
     assert mail.extra <= pre, f"extra={mail.extra} preexisting={pre}"
 

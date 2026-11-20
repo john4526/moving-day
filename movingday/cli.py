@@ -112,7 +112,7 @@ def _check(config, users, source_only=False):
     return 1 if summary["failed"] else 0
 
 
-def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping, allow_trash=False):
+def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping, allow_trash=False, adopt=False):
     try:
         ledger = Ledger(config.ledger_path)
         try:
@@ -120,7 +120,7 @@ def _copy_user(config, u, do_mail, do_cal, do_contacts, do_drive, mapping, allow
             e = {"user": u.key}
             if do_mail:
                 e.update(asdict(mail.copy_mail(
-                    apis.src_gmail, apis.dst_gmail, ledger, u.key, u.source, u.destination)))
+                    apis.src_gmail, apis.dst_gmail, ledger, u.key, u.source, u.destination, adopt)))
             if do_cal:
                 e.update(asdict(calendar_copy.copy_calendars(
                     apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination,
@@ -173,7 +173,8 @@ def _copy(config, mapping, a):
         with ThreadPoolExecutor(max_workers=config.parallel_users) as pool:
             results = list(pool.map(
                 lambda u: _copy_user(config, u, a.mail or both, a.calendar or both, a.contacts or both,
-                                     a.drive or both, mapping, u.key in a.allow_trash), users))
+                                     a.drive or both, mapping, u.key in a.allow_trash,
+                                     u.key in a.allow_existing), users))
         bad = any(not r["ok"] for r in results)
         emit({"command": "copy", "ok": not bad, "batch": a.batch, "users": results,
               "seconds": round(time.monotonic() - t0)})

@@ -9,7 +9,7 @@ It is built to be run by an AI agent, or by a person typing the same four
 commands. People approve every irreversible step, and a per-user validation
 report is the evidence for sign-off.
 
-**Status:** built, with 269 logic tests passing against a simulated Google
+**Status:** built, with 291 logic tests passing against a simulated Google
 API. It has not yet been run against real Google Workspace accounts. Work
 through [docs/rehearsal-checklist.md](docs/rehearsal-checklist.md) before any
 real copy.
@@ -31,6 +31,9 @@ real copy.
   counts only.
 - Is safe to re-run. A second run copies only what is missing and creates no
   duplicates. An interrupted run resumes where it stopped.
+- Builds on an earlier transfer made with another tool: with
+  `--allow-existing`, earlier copies are matched by Message-ID, their labels
+  brought up to date, and only the rest is copied.
 - Reads the source account only. There is no delete command and no code path
   that changes the source.
 - Keeps mail content out of its output, logs and reports. The operator sees

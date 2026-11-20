@@ -110,6 +110,13 @@ class FakeGmail(_Fake):
         return BytesHeaderParser().parsebytes(m["raw"]).get("Message-ID"), list(m["labels"])
 
     @api
+    def set_labels(self, user, msg_id, add, remove) -> None:
+        if any(i not in SYSTEM_LABELS and i not in self.labels.get(user, {}) for i in add):
+            raise ApiError("http_400", False)
+        m = self._get(user, msg_id)
+        m["labels"] = [i for i in m["labels"] if i not in remove] + [i for i in add if i not in m["labels"]]
+
+    @api
     def insert(self, user, raw, label_ids, thread_id) -> tuple[str, str]:
         if any(i not in SYSTEM_LABELS and i not in self.labels.get(user, {}) for i in label_ids):
             raise ApiError("http_400", False)
