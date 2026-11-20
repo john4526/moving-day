@@ -111,8 +111,8 @@ rarely changes, and copy only the last 30 days during the freeze.
    accepts a subdomain for a trial account's own address, and whoever
    controls DNS will add the records.
 2. **Mock on a subset of real users** (your decision, 18 Nov). `check`
-   measures mailbox sizes for all users without copying. A small group of
-   volunteers, including the largest mailbox, is locked out and copied, and
+   measures mailbox sizes for all users without copying. A sample mock user
+   population, including the largest mailbox, is locked out and copied, and
    the validation report is produced. This gives real speed, proves the
    lockout, and exercises the report. Mail keeps arriving in the old
    account during the mock, so the "freeze held" check is reported as

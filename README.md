@@ -124,7 +124,7 @@ test plan.
 
 1. **Test:** a rehearsal on two trial Google Workspace accounts with made-up
    data.
-2. **Mock:** a few real volunteers are copied and the validation report is
+2. **Mock:** a sample mock user population of real users is copied and the validation report is
    reviewed.
 3. **Cutover:** inbound mail is routed to a queue, users are locked out of the
    old account, everyone is copied and verified, and only then is the domain

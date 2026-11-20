@@ -271,8 +271,8 @@ number.
 
 ### Moving from the mock to the cutover
 
-The ledger remembers what has already been copied for each user. Decide per
-volunteer what happens to their mock copy:
+The ledger remembers what has already been copied for each user. Decide for each
+user in the sample mock user population what happens to their mock copy:
 
 - **Destination account deleted and recreated:** the old ledger rows would
   make the tool skip mail that is no longer there. Use a fresh

@@ -167,13 +167,13 @@ an item says "else", the fallback is named.
 - [ ] Vendor answer: does one purchase cover a test domain or a trial?
 - [ ] Vendor answer: can the queue be used twice?
 
-## G. Mock on real volunteers
+## G. Mock on the sample mock user population
 
 Use the commands from `docs/operator-setup.md`, section 7.
 
 - [ ] 1. `check` for all users (no `--batch`). Note the mailbox sizes and
   that every user shows `ok: true`.
-- [ ] 2. Lock out the volunteers (a person does this, in the source
+- [ ] 2. Lock out the sample mock user population (a person does this, in the source
   account). Include the user with the largest mailbox.
 - [ ] 3. `copy --batch NAME`. Record the `seconds` value printed.
 - [ ] 4. `verify --batch NAME --expect-changes`. Note the report file name.
@@ -184,7 +184,7 @@ Use the commands from `docs/operator-setup.md`, section 7.
   appears anywhere in it.
 - [ ] 6. Record the total duration and work out whether the real copy fits
   the window. If not, the design's fallback is a decision for Jonathon.
-- [ ] 7. Decide what happens to the volunteers' trial copy (keep and top up,
+- [ ] 7. Decide what happens to the sample mock user population's trial copy (keep and top up,
   or delete and recreate the destination users).
 - [ ] 8. Record how much of the operator's Claude usage the mock took
   (see "Models and token limits" in `docs/operator-setup.md`). Scale it to
