@@ -4,7 +4,7 @@ import html
 import pytest
 
 from movingday import runtime
-from movingday.compare import compare_calendar, compare_mail
+from movingday.compare import compare_calendar, compare_contacts, compare_drive, compare_mail
 from movingday.config import load_config
 from movingday.ledger import Ledger
 from movingday.mapping import load_mapping
@@ -102,15 +102,22 @@ def ledger(cfg):
 
 @pytest.fixture(scope="session")
 def results(cfg, apis, ledger, mapping):
-    """One MailResult and one CalResult per user; a comparison that raised is not repeated."""
+    """One MailResult, CalResult, ContactResult and DriveResult per user; a comparison that raised is not repeated."""
     cache = {}
 
     def get(kind, u):
         if (kind, u.key) not in cache:
             try:
                 if kind == "mail":
-                    pre = int(ledger.get_meta(u.key, "preexisting") or 0)
+                    pre = int(ledger.get_meta(u.key, "preexisting") or 0) - ledger.adopted_count(u.key)
                     cache[kind, u.key] = compare_mail(apis.src_gmail, apis.dst_gmail, u.source, u.destination, pre)
+                elif kind == "contacts":
+                    cache[kind, u.key] = compare_contacts(
+                        apis.src_people, apis.dst_people, ledger, u.key, u.source, u.destination)
+                elif kind == "drive":
+                    cache[kind, u.key] = compare_drive(
+                        apis.src_drive, apis.dst_drive, ledger, mapping, u.key, u.source, u.destination,
+                        cfg.dest_domain)
                 else:
                     cache[kind, u.key] = compare_calendar(
                         apis.src_cal, apis.dst_cal, ledger, mapping, u.key, u.source, u.destination,
@@ -133,3 +140,13 @@ def mail(results, user):
 @pytest.fixture
 def cal(results, user):
     return results("cal", user)
+
+
+@pytest.fixture
+def con(results, user):
+    return results("contacts", user)
+
+
+@pytest.fixture
+def drv(results, user):
+    return results("drive", user)

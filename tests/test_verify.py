@@ -6,13 +6,16 @@ import pytest
 from fakes import make_apis
 
 from movingday import cli, runtime
+from movingday.api import ApiError
 from movingday.ledger import Ledger
 
 VALIDATION_TESTS = {
     "test_mapping_valid", "test_inventory_present", "test_mail_none_missing", "test_mail_no_duplicates",
     "test_mail_no_foreign_messages", "test_mail_label_counts", "test_calendar_counts",
     "test_calendar_sharing", "test_calendar_events_missing", "test_nothing_left_failed", "test_freeze_held",
-    "test_carried_over_notes",
+    "test_carried_over_notes", "test_contacts_count", "test_contacts_missing", "test_contact_labels",
+    "test_drive_files_count", "test_drive_files_missing", "test_drive_folders", "test_drive_checksums",
+    "test_drive_sharing", "test_drive_in_step",
 }
 
 
@@ -41,7 +44,7 @@ def env(tmp_path, monkeypatch):
         apis.dst_cal.add_calendar(f"{u}@new.org", f"{u}@new.org", primary=True)
         apis.src_cal.add_event(f"{u}@old.org", f"{u}@old.org",
                                {"summary": "e", "attendees": [{"email": "x@else.org"}]})
-    monkeypatch.setattr(runtime, "get_apis", lambda config: apis)
+    monkeypatch.setattr(runtime, "get_apis", lambda config, source_only=False: apis)
     return apis, str(tmp_path / "c.toml"), tmp_path
 
 
@@ -162,9 +165,10 @@ def test_session_fixture_failure_keeps_condition_on_every_row(env, capfd, monkey
     code, out, cap = run(capfd, "verify", "--batch", "b1", "--config", cfg)
     assert code == 1 and len(out) == 1 and cap.err == ""
     rows, _ = report_rows(tmp / "r" / out[0]["report"])
-    assert len(rows) == 22 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
-    uses_apis = [t for t in rows if "_mail_" in t or "_calendar_" in t or "inventory" in t]
-    assert len(uses_apis) == 15 and all(rows[t][3] == "error: http_403" for t in uses_apis)
+    assert len(rows) == 40 and all(r[1].endswith(".") for r in rows.values())  # every row has its condition
+    uses_apis = [t for t in rows if "_mail_" in t or "_calendar_" in t or "_contact" in t or "inventory" in t
+                 or "_drive_" in t]
+    assert len(uses_apis) == 33 and all(rows[t][3] == "error: http_403" for t in uses_apis)
     assert rows["test_validation.py::test_mail_none_missing[u001]"][2] == "0 missing"  # static expected
     assert rows["test_validation.py::test_calendar_counts[u001]"][2] == "—"  # data-dependent: unknown
 
@@ -211,7 +215,11 @@ def test_carried_over_notes_shows_counts_for_information(env, capfd):
     assert actual.splitlines() == [
         "threads: 3 on source, 3 on destination", "messages with no Date header: 1",
         "calendar entries of unsupported types not copied: 1", "outside shares: 2", "failed shares: 1",
-        "shared calendars skipped: 3"]
+        "shared calendars skipped: 3", "other contacts not copied: 0",
+        "contacts removed on source: 0", "Drive unsupported files not copied: 0", "Drive forms not copied: 0",
+        "Drive files kept as Office files: 0", "Drive files unplaced: 0", "Drive outside shares: 0",
+        "Drive failed shares: 0", "Drive files moved to destination trash: 0", "Drive trashing held: no",
+        "Comments, suggestions and version history are not carried over."]
 
 
 def test_nothing_left_failed_lists_reasons(env, capfd):
@@ -226,3 +234,142 @@ def test_nothing_left_failed_lists_reasons(env, capfd):
     rows, _ = report_rows(tmp / "r" / out[0]["report"])
     assert rows["test_validation.py::test_nothing_left_failed[u001]"][3] == "3 failed (http_403: 2, network_error: 1)"
     assert rows["test_validation.py::test_nothing_left_failed[u002]"][3] == "0 failed"
+
+
+def _contact(apis, name, groups=()):
+    meta = {"source": {"type": "CONTACT", "id": "x"}}
+    return apis.src_people.add_contact("a@old.org", {
+        "names": [{"givenName": name, "metadata": meta}],
+        "memberships": [{"contactGroupMembership": {"contactGroupResourceName": g}} for g in groups],
+        "metadata": {"sources": [{"type": "CONTACT", "id": "x", "etag": "e"}]}})
+
+
+def test_contact_checks_pass_after_copy_and_show_counts(env, capfd):
+    apis, cfg, tmp = env
+    g = apis.src_people.add_group("a@old.org", "Team")
+    _contact(apis, "one", [g]), _contact(apis, "two")
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 0
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    count = rows["test_validation.py::test_contacts_count[u001]"]
+    assert count[:4] == ["Passed", "The destination has as many contacts as the source.",
+                         "contacts: 2 (same as source)", "contacts: 2"]
+    assert rows["test_validation.py::test_contacts_missing[u001]"][2:4] == ["0 missing contacts", "0 missing contacts"]
+    labels = rows["test_validation.py::test_contact_labels[u001]"]
+    assert labels[2:4] == ["labels: 1 (same as source)\n0 labels short of members",
+                           "labels: 1\n0 labels short of members"]
+    assert rows["test_validation.py::test_contacts_count[u002]"][3] == "contacts: 0"
+
+
+def test_missing_contact_fails_checks(env, capfd):
+    apis, cfg, _ = env
+    g = apis.src_people.add_group("a@old.org", "Team")
+    _contact(apis, "one", [g]), _contact(apis, "two", [g])
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    apis.dst_people.contacts["a@new.org"].popitem()
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1
+    for name in ("test_contacts_count", "test_contacts_missing", "test_contact_labels"):
+        assert check(out, name, "u001")[0]["ok"] is False and check(out, name, "u002")[0]["ok"] is True
+
+
+def test_failed_contact_fails_nothing_left_failed(env, capfd):
+    apis, cfg, tmp = env
+    _contact(apis, "one")
+    apis.dst_people.fail_next("create_contact", ApiError("http_500", False))
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    assert rows["test_validation.py::test_nothing_left_failed[u001]"][3] == "1 failed (http_500: 1)"
+
+
+def test_carried_over_notes_shows_other_contacts_and_removed_on_source(env, capfd):
+    apis, cfg, tmp = env
+    res = _contact(apis, "one")
+    apis.src_people.set_other_contacts("a@old.org", 9)
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    del apis.src_people.contacts["a@old.org"][res]
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    lines = rows["test_validation.py::test_carried_over_notes[u001]"][3].splitlines()
+    assert "other contacts not copied: 9" in lines and "contacts removed on source: 1" in lines
+    assert "other contacts not copied: 0" in rows["test_validation.py::test_carried_over_notes[u002]"][3]
+
+
+PDF, DOC, FORM = "application/pdf", "application/vnd.google-apps.document", "application/vnd.google-apps.form"
+
+
+def _drive(apis):
+    d = apis.src_drive
+    top = d.add_folder("a@old.org")
+    pdf = d.add_file("a@old.org", PDF, top, b"pdf")
+    d.add_file("a@old.org", DOC, content=b"doc")
+    d.add_file("a@old.org", FORM)
+    d.share("a@old.org", pdf, {"role": "reader", "type": "user", "emailAddress": "b@old.org"})
+    return pdf
+
+
+def test_report_has_drive_checks_with_expected_and_actual(env, capfd):
+    apis, cfg, tmp = env
+    _drive(apis)
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 0
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    row = lambda n, u="u001": rows[f"test_validation.py::{n}[{u}]"]
+    assert row("test_drive_files_count")[:4] == [
+        "Passed", "The destination has as many files as the source owns (unsupported types excepted).",
+        "files: 2 (same as source)", "files: 2"]
+    assert row("test_drive_files_missing")[2:4] == ["0 missing files", "0 missing files"]
+    assert row("test_drive_folders")[2:4] == ["folders: 1 (same as source)",
+                                              "folders: 1\nfiles whose folder is not copied: 0 (for information)"]
+    assert row("test_drive_checksums")[2:4] == ["0 checksum mismatches", "0 checksum mismatches"]
+    assert row("test_drive_sharing")[2:4] == ["0 missing shares\n0 extra shares"] * 2
+    assert row("test_drive_in_step")[2:4] == ["0 changed since copied", "0 changed since copied"]
+    notes = row("test_carried_over_notes")[3].splitlines()
+    assert "Drive forms not copied: 1" in notes and "Drive unsupported files not copied: 0" in notes
+    assert row("test_drive_files_count", "u002")[3] == "files: 0"
+    # a destination copy gone and a share removed fail their checks
+    led = Ledger(str(tmp / "l.db"))
+    pdf_copy = next(r["dst_id"] for r in led.drive_rows("u001").values() if r["md5"])
+    led.close()
+    apis.dst_drive.files[pdf_copy]["perms"].clear()
+    apis.dst_drive.files[pdf_copy]["md5Checksum"] = "bad"
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1
+    assert check(out, "test_drive_sharing", "u001")[0]["ok"] is False
+    assert check(out, "test_drive_checksums", "u001")[0]["ok"] is False
+    assert check(out, "test_drive_sharing", "u002")[0]["ok"] is True
+
+
+def test_drive_in_step_expected_to_differ_with_flag(env, capfd):
+    apis, cfg, tmp = env
+    pdf = _drive(apis)
+    run(capfd, "copy", "--batch", "b1", "--config", cfg)
+    apis.src_drive.edit(pdf, content=b"edited after the copy")
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1 and check(out, "test_drive_in_step", "u001")[0]["ok"] is False
+    rows, _ = report_rows(tmp / "r" / out[0]["report"])
+    assert rows["test_validation.py::test_drive_in_step[u001]"][3] == "1 changed since copied"
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--expect-changes", "--config", cfg)
+    assert code == 0 and check(out, "test_drive_in_step", "u001")[0]["ok"] is True
+
+
+def test_verify_passes_after_adopting_an_earlier_transfer(env, capfd):
+    apis, cfg, _ = env
+    apis.dst_gmail.add_message("a@new.org", raw(0), ["INBOX", "UNREAD"])  # earlier transfer, stale state
+    assert run(capfd, "copy", "--batch", "b1", "--allow-existing", "u001", "--config", cfg)[0] == 0
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 0 and out[0]["passed"] is True
+
+
+def test_adopted_copies_no_longer_count_as_allowed_extras(env, capfd):
+    apis, cfg, _ = env
+    apis.dst_gmail.add_message("a@new.org", raw(0), ["INBOX"])
+    run(capfd, "copy", "--batch", "b1", "--allow-existing", "u001", "--config", cfg)
+    apis.dst_gmail.add_message("a@new.org", raw(99), ["INBOX"])  # not from the source
+    code, out, _ = run(capfd, "verify", "--batch", "b1", "--config", cfg)
+    assert code == 1
+    assert check(out, "test_mail_no_foreign_messages", "u001")[0]["ok"] is False

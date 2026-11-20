@@ -6,6 +6,8 @@ from email.parser import BytesHeaderParser
 from movingday.api import ApiError
 
 SKIP_LABELS = {"SPAM", "TRASH", "DRAFT", "CHAT"}
+# ponytail: assumed not changeable on an existing message; confirm in the rehearsal (checklist C)
+FIXED_LABELS = {"SENT", "DRAFT", "CHAT"}
 
 
 @dataclass
@@ -14,6 +16,7 @@ class MailStats:
     copied: int
     skipped: int
     failed: int
+    adopted: int = 0
 
 
 def _hash_header(value: str) -> str:
@@ -64,7 +67,44 @@ def _recover(dst, ledger, user_key, dst_user) -> None:
             ledger.drop_pending(user_key, src_id)
 
 
-def copy_mail(src, dst, ledger, user_key, src_user, dst_user) -> MailStats:
+def _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) -> int:
+    """Once per user: each copy an earlier transfer left in the destination is matched to a source message by
+    Message-ID, its labels set to the source's, and recorded as done, so it is not copied a second time."""
+    if ledger.get_meta(user_key, "adopt_done") is not None:
+        return 0
+    claimed = ledger.done_dst_ids(user_key)
+    earlier: dict[str, list[tuple[str, str, set]]] = {}
+    for mid, thread in dst.list_messages(dst_user):
+        if mid not in claimed:
+            header, ids = dst.get_header_and_labels(dst_user, mid)
+            if header is not None and header.strip():
+                earlier.setdefault(_hash_header(header), []).append((mid, thread, set(ids)))
+    done, n = ledger.done_ids(user_key), 0
+    for src_id, src_thread in listed:
+        if not earlier:
+            break
+        if src_id in done:
+            continue
+        header, ids = src.get_header_and_labels(src_user, src_id)
+        if header is None or not header.strip() or SKIP_LABELS & set(ids) or any(i not in labels for i in ids):
+            continue  # copied the normal way (or failed there with its reason)
+        h = _hash_header(header)
+        if h not in earlier:
+            continue
+        mid, thread, have = earlier[h].pop(0)
+        if not earlier[h]:
+            del earlier[h]
+        want = {labels[i] for i in ids}
+        add, remove = sorted(want - have - FIXED_LABELS), sorted(have - want - FIXED_LABELS)
+        if add or remove:  # before the ledger write, so an interrupted run simply repeats it
+            dst.set_labels(dst_user, mid, add, remove)
+        ledger.mark_adopted(user_key, src_id, src_thread, h, mid, thread)
+        n += 1
+    ledger.set_meta(user_key, "adopt_done", "1")
+    return n
+
+
+def copy_mail(src, dst, ledger, user_key, src_user, dst_user, adopt=False) -> MailStats:
     if ledger.get_meta(user_key, "preexisting") is None:
         ledger.set_meta(user_key, "preexisting", str(dst.profile(dst_user)["messagesTotal"]))
     if ledger.get_meta(user_key, "history_start") is None:
@@ -74,6 +114,7 @@ def copy_mail(src, dst, ledger, user_key, src_user, dst_user) -> MailStats:
 
     # ponytail: relies on list order being newest-first; sort by internalDate if the rehearsal shows split threads
     listed = list(reversed(src.list_messages(src_user)))
+    adopted = _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) if adopt else 0
     done = ledger.done_ids(user_key)
     copied = skipped = failed = 0
     for msg_id, _thread in listed:
@@ -103,4 +144,4 @@ def copy_mail(src, dst, ledger, user_key, src_user, dst_user) -> MailStats:
     if ledger.get_meta(user_key, "no_date_header") is None:
         ledger.set_meta(user_key, "no_date_header", "0")
     ledger.set_meta(user_key, "history_end", str(src.profile(src_user)["historyId"]))
-    return MailStats(len(listed), copied, skipped, failed)
+    return MailStats(len(listed), copied, skipped, failed, adopted)
