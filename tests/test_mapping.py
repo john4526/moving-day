@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from fakes import make_writable_by_others
 from movingday.mapping import MappingError, load_mapping
 
 HEADER = "key,source,destination,batch\n"
@@ -91,7 +92,7 @@ def test_batch_with_dot_dash_underscore_accepted(tmp_path):
 
 def test_mapping_writable_by_group_refused(tmp_path):
     p = write(tmp_path, "u001,a@x.org,a@y.org,b1\n")
-    os.chmod(p, 0o664)
+    make_writable_by_others(p, 0o664)
     with pytest.raises(Exception) as e:
         load_mapping(p)
     assert e.value.reason == "untrusted_file"

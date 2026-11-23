@@ -238,3 +238,115 @@ def test_no_date_header_survives_interrupt(env):
     a.dst_gmail.insert = real
     run(env)
     assert led.get_meta(U, "no_date_header") == "1"
+
+
+# earlier transfers: copies another tool already put in the destination are adopted, not duplicated
+
+def run_adopt(env):
+    a, led = env
+    return copy_mail(a.src_gmail, a.dst_gmail, led, U, "s@x", "d@x", adopt=True)
+
+
+def test_without_adopt_earlier_copies_are_left_alone(env):
+    a, _ = env
+    a.dst_gmail.add_message("d@x", raw(1), ["INBOX"])
+    a.src_gmail.add_message("s@x", raw(1), ["INBOX"])
+    assert run(env).adopted == 0 and len(dst_msgs(env)) == 2
+
+def test_adopts_earlier_copies_and_copies_only_the_delta(env):
+    a, led = env
+    old = a.dst_gmail.add_label("d@x", "Migrated")
+    for n in range(3):
+        a.dst_gmail.add_message("d@x", raw(n), ["INBOX", "UNREAD", old])
+    lid = a.src_gmail.add_label("s@x", "Donors")
+    for n in range(4):
+        a.src_gmail.add_message("s@x", raw(n), ["INBOX", "STARRED", lid])
+    st = run_adopt(env)
+    assert st == MailStats(found=4, copied=1, skipped=0, failed=0, adopted=3)
+    assert len(dst_msgs(env)) == 4
+    names = a.dst_gmail.labels["d@x"]
+    for m in dst_msgs(env).values():  # labels and read state now match the source
+        assert sorted(names.get(i, i) for i in m["labels"]) == ["Donors", "INBOX", "STARRED"]
+    assert led.counts(U)["done"] == 4
+    assert led.get_meta(U, "preexisting") == "3"
+    assert led.adopted_count(U) == 3
+
+
+def test_rerun_after_adoption_changes_nothing(env):
+    a, led = env
+    a.dst_gmail.add_message("d@x", raw(1), ["INBOX"])
+    a.src_gmail.add_message("s@x", raw(1), ["INBOX"])
+    run_adopt(env)
+    st = run_adopt(env)
+    assert st == MailStats(found=1, copied=0, skipped=0, failed=0, adopted=0)
+    assert len(dst_msgs(env)) == 1 and led.adopted_count(U) == 1
+
+
+def test_adoption_matches_each_earlier_copy_once(env):
+    a, _ = env
+    a.dst_gmail.add_message("d@x", raw(1), ["INBOX"])
+    a.src_gmail.add_message("s@x", raw(1), ["INBOX"])
+    a.src_gmail.add_message("s@x", raw(1), ["SENT"])  # same Message-ID twice (sent to self)
+    st = run_adopt(env)
+    assert (st.adopted, st.copied) == (1, 1)
+    assert len(dst_msgs(env)) == 2
+
+
+def test_headerless_messages_are_never_adopted(env):
+    a, _ = env
+    a.dst_gmail.add_message("d@x", raw(1, mid=False), ["INBOX"])
+    a.src_gmail.add_message("s@x", raw(1, mid=False), ["INBOX"])
+    st = run_adopt(env)
+    assert (st.adopted, st.copied) == (0, 1)
+
+
+def test_new_message_joins_the_adopted_thread(env):
+    a, _ = env
+    dst_id = a.dst_gmail.add_message("d@x", raw(1), ["INBOX"], thread_id="dt1")
+    a.src_gmail.add_message("s@x", raw(1), ["INBOX"], thread_id="st1")
+    a.src_gmail.add_message("s@x", raw(2), ["INBOX"], thread_id="st1")
+    run_adopt(env)
+    assert {m["thread"] for m in dst_msgs(env).values()} == {"dt1"}
+    assert dst_id in dst_msgs(env)
+
+
+def test_interrupted_adoption_resumes_without_double_matching(env):
+    a, led = env
+    for n in range(3):
+        a.dst_gmail.add_message("d@x", raw(n), ["INBOX"])
+        a.src_gmail.add_message("s@x", raw(n), ["INBOX"])
+    real = a.dst_gmail.set_labels
+    state = {"n": 0}
+
+    def flaky(user, msg_id, add, remove):
+        state["n"] += 1
+        if state["n"] == 2:
+            raise KeyboardInterrupt
+        return real(user, msg_id, add, remove)
+
+    for m in a.src_gmail.messages["s@x"].values():
+        m["labels"].append("STARRED")  # every adopted copy needs a label change
+    a.src_gmail.add_message("s@x", raw(9), ["INBOX", "STARRED"])
+    a.dst_gmail.set_labels = flaky
+    with pytest.raises(KeyboardInterrupt):
+        run_adopt(env)
+    a.dst_gmail.set_labels = real
+    run_adopt(env)
+    assert len(dst_msgs(env)) == 4
+    assert led.counts(U)["done"] == 4 and led.adopted_count(U) == 3
+
+
+def test_adoption_error_holds_one_message_and_retries_next_run(env):
+    a, led = env
+    for n in range(2):
+        a.dst_gmail.add_message("d@x", raw(n), ["INBOX"])
+        a.src_gmail.add_message("s@x", raw(n), ["INBOX", "STARRED"])  # each adopted copy needs a label change
+    a.src_gmail.add_message("s@x", raw(9), ["INBOX"])
+    a.dst_gmail.fail_next("set_labels", ApiError("http_403", retryable=False))
+    st = run_adopt(env)
+    # the failed one is not copied (that would duplicate its earlier copy); the rest carries on
+    assert st == MailStats(found=3, copied=1, skipped=0, failed=1, adopted=1)
+    assert len(dst_msgs(env)) == 3 and led.failures(U) == {"http_403": 1}
+    st = run_adopt(env)
+    assert st == MailStats(found=3, copied=0, skipped=0, failed=0, adopted=1)
+    assert len(dst_msgs(env)) == 3 and led.counts(U) == {"done": 3, "failed": 0, "pending": 0}

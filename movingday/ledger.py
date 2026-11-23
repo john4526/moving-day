@@ -26,7 +26,26 @@ CREATE TABLE IF NOT EXISTS meta(
   PRIMARY KEY(user_key, name));
 CREATE TABLE IF NOT EXISTS calendar_claims(
   src_cal TEXT PRIMARY KEY, user_key TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS contacts(
+  user_key TEXT NOT NULL, src_resource TEXT NOT NULL, dst_resource TEXT NOT NULL,
+  src_etag TEXT NOT NULL, state TEXT NOT NULL, reason TEXT,
+  PRIMARY KEY(user_key, src_resource));
+CREATE TABLE IF NOT EXISTS contact_groups(
+  user_key TEXT NOT NULL, src_group TEXT NOT NULL, dst_group TEXT NOT NULL,
+  PRIMARY KEY(user_key, src_group));
+CREATE TABLE IF NOT EXISTS drive_items(
+  user_key TEXT NOT NULL, src_id TEXT NOT NULL, dst_id TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'file', src_version TEXT NOT NULL DEFAULT '', src_modified TEXT NOT NULL DEFAULT '',
+  md5 TEXT NOT NULL DEFAULT '', src_parent TEXT NOT NULL DEFAULT '', placed INTEGER NOT NULL DEFAULT 1,
+  share_fp TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'pending', reason TEXT,
+  PRIMARY KEY(user_key, src_id));
+CREATE TABLE IF NOT EXISTS drive_shares(
+  user_key TEXT NOT NULL, src_id TEXT NOT NULL, sig TEXT NOT NULL, dst_perm_id TEXT NOT NULL,
+  PRIMARY KEY(user_key, src_id, sig));
 """
+
+_DRIVE_COLS = ("dst_id", "kind", "src_version", "src_modified", "md5", "src_parent", "placed", "share_fp",
+               "state", "reason")
 
 
 class Ledger:
@@ -71,6 +90,23 @@ class Ledger:
             "dst_id=excluded.dst_id, dst_thread=excluded.dst_thread",
             (user_key, src_id, dst_id, dst_thread))
 
+    def mark_adopted(self, user_key, src_id, src_thread, msgid_hash, dst_id, dst_thread):
+        """A copy an earlier transfer left in the destination now stands for this source message."""
+        self._w(
+            "INSERT INTO messages(user_key,src_id,src_thread,dst_id,dst_thread,msgid_hash,state,reason) "
+            "VALUES(?,?,?,?,?,?,'done','adopted') ON CONFLICT(user_key,src_id) DO UPDATE SET state='done', "
+            "reason='adopted', dst_id=excluded.dst_id, dst_thread=excluded.dst_thread, "
+            "msgid_hash=excluded.msgid_hash WHERE messages.state!='done'",
+            (user_key, src_id, src_thread, dst_id, dst_thread, msgid_hash))
+
+    def adopted_count(self, user_key):
+        return self._r("SELECT COUNT(*) FROM messages WHERE user_key=? AND state='done' AND reason='adopted'",
+                       (user_key,))[0][0]
+
+    def done_dst_ids(self, user_key):
+        return {r[0] for r in self._r(
+            "SELECT dst_id FROM messages WHERE user_key=? AND state='done'", (user_key,))}
+
     def mark_failed(self, user_key, src_id, reason):
         self._w(
             "INSERT INTO messages(user_key,src_id,state,reason) VALUES(?,?,'failed',?) "
@@ -106,7 +142,7 @@ class Ledger:
 
     def failures(self, user_key):
         out: dict[str, int] = {}
-        for table in ("messages", "events"):
+        for table in ("messages", "events", "contacts", "drive_items"):
             for reason, n in self._r(
                     f"SELECT COALESCE(reason,'unknown'), COUNT(*) FROM {table} "
                     "WHERE user_key=? AND state='failed' GROUP BY 1", (user_key,)):
@@ -124,6 +160,11 @@ class Ledger:
         """True if user_key is (or now becomes) the one user who copies this shared calendar."""
         self._w("INSERT OR IGNORE INTO calendar_claims VALUES(?,?)", (src_cal, user_key))
         return self._r("SELECT user_key FROM calendar_claims WHERE src_cal=?", (src_cal,))[0][0] == user_key
+
+    def calendar_claimant(self, src_cal) -> str | None:
+        """Read-only: who has claimed this shared calendar, if anyone."""
+        rows = self._r("SELECT user_key FROM calendar_claims WHERE src_cal=?", (src_cal,))
+        return rows[0][0] if rows else None
 
     def event_rows(self, user_key, src_cal):
         return {r[0]: (r[1], r[2], r[3]) for r in self._r(
@@ -143,6 +184,21 @@ class Ledger:
         self._w("DELETE FROM events WHERE user_key=? AND src_cal=? AND src_event=?",
                 (user_key, src_cal, src_event))
 
+    # contacts
+    def contact_rows(self, user_key):
+        return {r[0]: (r[1], r[2], r[3]) for r in self._r(
+            "SELECT src_resource, dst_resource, src_etag, state FROM contacts WHERE user_key=?", (user_key,))}
+
+    def set_contact(self, user_key, src_resource, dst_resource, src_etag, state, reason=None):
+        self._w("INSERT OR REPLACE INTO contacts VALUES(?,?,?,?,?,?)",
+                (user_key, src_resource, dst_resource, src_etag, state, reason))
+
+    def group_map(self, user_key):
+        return dict(self._r("SELECT src_group, dst_group FROM contact_groups WHERE user_key=?", (user_key,)))
+
+    def set_group(self, user_key, src_group, dst_group):
+        self._w("INSERT OR REPLACE INTO contact_groups VALUES(?,?,?)", (user_key, src_group, dst_group))
+
     # per-user facts
     def set_meta(self, user_key, name, value):
         self._w("INSERT OR REPLACE INTO meta VALUES(?,?,?)", (user_key, name, value))
@@ -150,3 +206,34 @@ class Ledger:
     def get_meta(self, user_key, name):
         r = self._r("SELECT value FROM meta WHERE user_key=? AND name=?", (user_key, name))
         return r[0][0] if r else None
+
+    # drive
+    def drive_rows(self, user_key) -> dict[str, dict]:
+        cols = ("user_key", "src_id") + _DRIVE_COLS
+        return {r[1]: dict(zip(cols, r)) for r in self._r(
+            f"SELECT {','.join(cols)} FROM drive_items WHERE user_key=?", (user_key,))}
+
+    def set_drive(self, user_key, src_id, **cols) -> None:
+        """Upsert; columns not given keep their value (a new row takes the defaults)."""
+        if not set(cols) <= set(_DRIVE_COLS):
+            raise ValueError("unknown drive column")
+        names = ",".join(("user_key", "src_id") + tuple(cols))
+        marks = ",".join("?" * (2 + len(cols)))
+        update = ",".join(f"{c}=excluded.{c}" for c in cols) or "src_id=src_id"
+        self._w(f"INSERT INTO drive_items({names}) VALUES({marks}) "
+                f"ON CONFLICT(user_key,src_id) DO UPDATE SET {update}", (user_key, src_id, *cols.values()))
+
+    def dst_folder(self, src_folder_id) -> str | None:
+        r = self._r("SELECT dst_id FROM drive_items WHERE src_id=? AND kind='folder' AND state='done' "
+                    "AND dst_id!='' LIMIT 1", (src_folder_id,))
+        return r[0][0] if r else None
+
+    def drive_shares(self, user_key, src_id) -> dict[str, str]:
+        return dict(self._r("SELECT sig, dst_perm_id FROM drive_shares WHERE user_key=? AND src_id=?",
+                            (user_key, src_id)))
+
+    def add_drive_share(self, user_key, src_id, sig, dst_perm_id) -> None:
+        self._w("INSERT OR REPLACE INTO drive_shares VALUES(?,?,?,?)", (user_key, src_id, sig, dst_perm_id))
+
+    def drop_drive_share(self, user_key, src_id, sig) -> None:
+        self._w("DELETE FROM drive_shares WHERE user_key=? AND src_id=? AND sig=?", (user_key, src_id, sig))

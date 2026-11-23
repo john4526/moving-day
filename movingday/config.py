@@ -7,11 +7,54 @@ class UntrustedFile(Exception):
     reason = "untrusted_file"
 
 
-def require_trusted(f) -> None:
-    """The agent may pass any --config: only trust files owned by this user and writable by no one else."""
-    st = os.fstat(f.fileno())
-    if st.st_uid != os.geteuid() or st.st_mode & 0o022:
-        raise UntrustedFile()
+if os.name == "nt":
+    import msvcrt
+
+    import ntsecuritycon as con
+    import win32api
+    import win32security as ws
+
+    # Any of these lets a principal change or replace the file.
+    _WRITE = (con.FILE_WRITE_DATA | con.FILE_APPEND_DATA | con.WRITE_DAC | con.WRITE_OWNER
+              | con.DELETE | con.GENERIC_WRITE | con.GENERIC_ALL)
+
+    def trusted_sids() -> list:
+        """This user, plus SYSTEM and Administrators, who can change any file on the machine anyway."""
+        token = ws.OpenProcessToken(win32api.GetCurrentProcess(), con.TOKEN_QUERY)
+        return [ws.GetTokenInformation(token, ws.TokenUser)[0],
+                ws.CreateWellKnownSid(ws.WinLocalSystemSid),
+                ws.CreateWellKnownSid(ws.WinBuiltinAdministratorsSid)]
+
+    # "OWNER RIGHTS": an entry that applies to whoever owns the file. The owner is checked separately,
+    # so it grants nothing to anyone else. Python 3.13+ puts it on directories made with mode 0o700.
+    _OWNER_RIGHTS = ws.ConvertStringSidToSid("S-1-3-4")
+
+    def require_trusted(f) -> None:
+        """The agent may pass any --config: only trust files owned by this user and writable by no one else."""
+        sd = ws.GetSecurityInfo(msvcrt.get_osfhandle(f.fileno()), ws.SE_FILE_OBJECT,
+                                ws.OWNER_SECURITY_INFORMATION | ws.DACL_SECURITY_INFORMATION)
+        trusted, dacl = trusted_sids(), sd.GetSecurityDescriptorDacl()
+        if sd.GetSecurityDescriptorOwner() not in trusted or dacl is None:  # no DACL = everyone has full access
+            raise UntrustedFile()
+        for i in range(dacl.GetAceCount()):
+            try:
+                ace = dacl.GetAce(i)
+                (ace_type, flags), mask, sid = ace[0], ace[1], ace[-1]
+            except Exception:  # an entry pywin32 cannot read (e.g. a conditional one) might grant anything
+                raise UntrustedFile() from None
+            if ace_type == con.ACCESS_DENIED_ACE_TYPE:
+                continue
+            if ace_type != con.ACCESS_ALLOWED_ACE_TYPE:  # object or conditional entries: refuse, don't guess
+                raise UntrustedFile()
+            if (not flags & con.INHERIT_ONLY_ACE and mask & _WRITE
+                    and sid != _OWNER_RIGHTS and sid not in trusted):
+                raise UntrustedFile()
+else:
+    def require_trusted(f) -> None:
+        """The agent may pass any --config: only trust files owned by this user and writable by no one else."""
+        st = os.fstat(f.fileno())
+        if st.st_uid != os.geteuid() or st.st_mode & 0o022:
+            raise UntrustedFile()
 
 
 @dataclass(frozen=True)

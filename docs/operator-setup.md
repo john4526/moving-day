@@ -26,6 +26,45 @@ There are three Mac users:
 administrator and can read everything, so an agent running there would not
 be kept from the keys or the data.
 
+## Before anything else: the scan
+
+Before any migration, run one read-only scan across every account. It plans
+the rehearsal, the mock and the cutover. Complete steps
+1 to 6 first (including the sudoers line in step 3 and the file owners and
+modes in step 6, or the tool refuses with `untrusted_file`). The config file
+needs every field, so use placeholder values for the destination key file,
+`dest_admin` and `dest_domain`. With `--source-only` the destination key file
+is never opened, and the destination does not need to exist yet.
+
+- **Credentials:** the source service account only (read-only scopes). The
+  destination key file is not opened.
+- **Mapping file:** the destination addresses may be placeholders (for
+  example `u001@placeholder.example`), because the scan never uses them.
+- **Command** (the agent runs it like every other command):
+
+  ```
+  cd /
+  sudo -u movingday /Users/movingday/venv/bin/movingday check --source-only --config /Users/movingday/data/config.toml
+  ```
+
+It prints one JSON line: per user the message count, the number of own,
+delegated and team calendars, the number of contacts and other contacts, and
+Drive counts (below), plus a `summary`. It writes nothing and copies
+nothing. Run it again later without `--source-only` to also see what is
+already in each destination mailbox.
+
+| Number | What it decides |
+|---|---|
+| Largest mailboxes (`largest_mailbox`, each `src_messages`) | Who must be in the mock, and how long the freeze must be. |
+| `total_messages` and the speed seen in the rehearsal | Which mail copy method to use. |
+| `contacts`, `other_contacts`, `total_contacts` | How big the contacts copy is. Other contacts (addresses Gmail saved for autocomplete) are counted for information and not copied. |
+| `drive_files`, `drive_folders`, `drive_bytes`, `total_drive_bytes`, `largest_drive_bytes` | How long the Drive pre-copy takes, and whether anyone is near Google's 750 GB per user per day upload limit. `drive_files` counts every owned file, including the types below. `drive_bytes` leaves out Google Docs, Sheets and Slides (Google gives them no size), so the real upload is larger: treat the 750 GB planning figure as a floor. Before the mock, compare each person's `drive_bytes` with their destination storage allowance. |
+| `drive_unsupported`, `drive_forms` | Files Google cannot export (Forms counted separately). They are not copied; tell their owners. |
+| `drive_shared_from_outside` | Files a person can open that someone outside the mapping file owns. Not copied; for information. |
+| `drive_in_others_folders` | Files a person owns inside someone else's folder. Copy the folder owners' batch first, or re-run once at the end. |
+| `delegated_calendars`, `team_calendars` (and the `accounts_with_` counts) | Whom to test and brief. People with team calendars need a batch order, because the first one copied takes the calendar. |
+| Near-empty accounts | Put them in an early batch. |
+
 ## 1. Create the service accounts (administrators of each account)
 
 A service account is a robot login that the tool uses instead of a person.
@@ -36,8 +75,8 @@ Do these steps once for each account, signed in as a super administrator of
 that account. For the source this is the parent organisation's administrator.
 
 1. In the Google Cloud console, create a project (or pick an existing one).
-2. In that project, enable these APIs: Gmail API and Google Calendar API.
-   For the destination only, also enable Admin SDK API.
+2. In that project, enable these APIs: Gmail API, Google Calendar API,
+   People API and Google Drive API. For the destination only, also enable Admin SDK API.
 3. Create a service account. Create a JSON key for it and download the file.
    Treat the key like a password.
 4. Copy the service account's numeric Client ID.
@@ -49,20 +88,32 @@ that account. For the source this is the parent organisation's administrator.
 **Source account scopes** (read only):
 
 ```
-https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/calendar.acls.readonly
+https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.readonly,https://www.googleapis.com/auth/calendar.acls.readonly,https://www.googleapis.com/auth/contacts.readonly,https://www.googleapis.com/auth/contacts.other.readonly,https://www.googleapis.com/auth/drive.readonly
 ```
 
 **Destination account scopes:**
 
 ```
-https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly
+https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/contacts,https://www.googleapis.com/auth/drive.file
 ```
 
 Notes:
 
 - The source grant cannot be limited to our users. Technically it can read
-  every mailbox in the parent organisation. Revoke it as soon as the
-  migration is signed off (see Teardown).
+  every mailbox, and every Drive file, in the parent organisation.
+- For Drive, the source grant adds only `drive.readonly`. If the source
+  entry already exists, add that one scope to it. Revoke the source grant as
+  soon as the migration is signed off (see Teardown).
+- All source APIs share one scope list. Until the parent organisation adds
+  `drive.readonly`, every copy fails, mail, calendars and contacts included,
+  not only Drive.
+- `gmail.modify` on the destination is used only to set the labels of mail an
+  earlier transfer left there (`copy --allow-existing`). The tool never
+  deletes or trashes mail.
+- The destination uses `drive.file`: the tool sees only the files it created.
+  If the rehearsal shows that is not enough, the fallback is the full
+  `https://www.googleapis.com/auth/drive` scope on the destination, recorded
+  as a decision, with `movingday/runtime.py` changed to match.
 - If Google refuses `calendar.acls.readonly` on the source, stop. The
   fallback is the full `https://www.googleapis.com/auth/calendar` scope on
   the source. This must be a recorded decision, and the code's scope list in
@@ -125,15 +176,26 @@ agent must not.**
    readable by other users:
 
    ```
+   sudo chown -R movingday /Users/movingday
    sudo chmod -R go-rwx /Users/movingday
    ls -ld /Users/movingday /Users/movingday/*
+   sudo ls -l /Users/movingday/data
    ```
 
-   The last command should show `drwx------` for every folder.
+   The third command should show `drwx------` for every folder. The last
+   one shows the owner of each data file: every file must be owned by
+   `movingday`. A file owned by another user (for example one you copied in
+   as yourself) is refused with `untrusted_file`; the `chown` above fixes it.
    The config file and the mapping file must be owned by `movingday` and
    must not be writable by anyone else. The tool checks this every time it
    starts and refuses with the reason `untrusted_file` (exit 2) otherwise.
    This stops anyone pointing `--config` at a file of their own.
+
+   On Windows the same check reads the file's owner and access list: the
+   owner must be the user running the tool (or SYSTEM or Administrators),
+   and no other user or group may have write access. The steps above are for
+   macOS; the Windows set-up, without the separate `movingday` and `wsagent`
+   users, is in the README under "Running on Windows".
 7. Keep the Mac awake for the whole copy (System Settings, then Lock Screen
    or Battery, or `caffeinate`).
 
@@ -190,7 +252,9 @@ max_existing    = 5                            # optional, default 5
 
 - `report_dir` must contain no spaces. The tool refuses to start otherwise.
 - `max_existing` is how many messages a destination mailbox may already hold
-  (Google's welcome mail). More than this and `copy` refuses to run.
+  (Google's welcome mail). More than this and `copy` refuses to run, unless
+  that user's key is listed after `--allow-existing` (see "Earlier
+  transfers" in section 7).
 - `sudo` removes environment variables, so always pass `--config` on the
   command line rather than relying on `MOVINGDAY_CONFIG`.
 
@@ -216,8 +280,8 @@ number.
 
 ### Moving from the mock to the cutover
 
-The ledger remembers what has already been copied for each user. Decide per
-volunteer what happens to their mock copy:
+The ledger remembers what has already been copied for each user. Decide for each
+user in the sample mock user population what happens to their mock copy:
 
 - **Destination account deleted and recreated:** the old ledger rows would
   make the tool skip mail that is no longer there. Use a fresh
@@ -270,10 +334,10 @@ sudo -u movingday /Users/movingday/venv/bin/movingday COMMAND --config /Users/mo
 
 | Command | What it does |
 |---|---|
-| `check` | Checks the mapping and access for all users. Prints each user's source message count and destination message count. Moves no data. |
-| `copy --batch NAME [--mail] [--calendar] [--allow-existing KEY ...]` | Copies. With neither `--mail` nor `--calendar` it copies both. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. |
+| `check [--source-only]` | Checks the mapping and access for all users. Prints each user's source message count, calendar counts, contact and other-contact counts, Drive counts and destination message count (the last not with `--source-only`), and a summary. Moves no data. |
+| `copy --batch NAME [--mail] [--calendar] [--contacts] [--drive] [--allow-existing KEY ...] [--allow-trash KEY ...]` | Copies. With none of `--mail`, `--calendar`, `--contacts` and `--drive` it copies all four. Safe to re-run. Refuses if a destination mailbox already holds more than `max_existing` messages it did not put there, unless that user's key is listed after `--allow-existing`. A user whose Drive trashing was held (`too_many_gone`) has it released for that run only if their key is listed after `--allow-trash`. |
 | `status [--batch NAME]` | Prints copied, failed and pending counts per user. |
-| `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account. |
+| `verify --batch NAME [--expect-changes]` | Runs the validation checks and writes the HTML report. Use `--expect-changes` during the mock, when mail still arrives in the old account (and Drive files still change). |
 
 `--help` is switched off. Every command prints one line of JSON and nothing
 else.
@@ -304,6 +368,38 @@ else.
 - **On any exit code other than 0 the agent stops and asks Jonathon.** For
   `verify`, `"passed": false` or `failed_checks` above 0 also means stop. The
   agent does not retry or work around it.
+- **`too_many_gone` (Drive trashing held).** The source listed nothing for
+  that person, or more than half of their copies would go to the trash, so
+  nothing was trashed. Jonathon checks the source account: if the files
+  were really deleted or given away, he tells the agent to re-run that
+  batch with `--allow-trash KEY` for that person. It lifts the hold for
+  that run only; trashed copies can be restored from the destination trash
+  for 30 days. The agent never adds `--allow-trash` on its own.
+
+### Earlier transfers
+
+If mail was already transferred to a destination mailbox by another tool,
+list that user's key after `--allow-existing`. On the first run for that
+user, `copy` matches each earlier copy to its source message by
+Message-ID, sets its labels and read/starred state to the source's, and
+records it as done (`adopted` in the output). Only messages with no earlier
+copy are copied. Nothing earlier is deleted.
+
+- Messages with no Message-ID header can't be matched and are copied
+  again; `verify` reports any resulting duplicates.
+- The flag is needed only until adoption has finished for that user. Later
+  runs for the same user are not refused for the earlier mail.
+- If setting labels on an earlier copy fails, that message is reported as
+  failed and is not copied (copying it would duplicate the earlier copy).
+  Run the same command again, with the flag, to retry it.
+- Earlier copies of mail since deleted on the source stay on the
+  destination. They count as extra mail already there, which `verify`
+  allows.
+- Adopted copies no longer count as "already there", so `verify` catches
+  any further unexpected mail.
+- Check `adopted` against the user's `dst_existing` from `check`: if
+  `adopted` is near 0, the earlier tool did not keep Message-IDs. Stop and
+  ask Jonathon before copying more.
 
 ### What the output means
 
@@ -313,6 +409,36 @@ Output uses user keys (`u001`), never addresses. Some fields you may see:
   (for example parent-organisation staff). They are kept as they are and
   counted. Shares to our own domain, and to groups on it, are moved to
   `dest_domain`.
+
+Contacts: with `--contacts` (or no part flag) each user's saved contacts
+and their labels are copied (`contacts_found`, `contacts_copied`,
+`contacts_updated`, `contacts_failed`, `labels_created`). A contact edited on
+the source is updated on the destination; a contact removed on the source is
+counted in `removed_on_source` and never deleted. A failed contact makes that
+user's `ok` false; run `copy` again to retry. Photos are not copied.
+
+Drive: with `--drive` (or no part flag) every file and folder each user owns
+in My Drive is copied, with its sharing (notifications off). Shared drives are
+not copied. Output keys start with `drive_`: `drive_folders`,
+`drive_files_copied`, `drive_files_updated` (files updated: content or name,
+description, starred), `drive_files_moved`, `drive_files_trashed` (copies
+moved to the destination trash because the source file was deleted or given
+away; restorable for 30 days), `drive_files_failed`, `drive_kept_as_office`,
+`drive_unsupported`, `drive_forms`, `drive_unplaced`, `drive_shares_added`,
+`drive_shares_removed`, `drive_shares_failed` and `drive_outside_shares`. A
+failed file makes that user's `ok` false; run `copy` again to retry.
+Unsupported types, Forms and files kept as Office files never do.
+
+Drive schedule:
+
+- **Week before cutover: pre-copy Drive.** Run `copy --batch NAME --drive`
+  for each batch while people still work, as often as useful. The source is
+  never changed, so this is safe.
+- **During the freeze: Drive top-up.** Run `copy --batch NAME --drive` once
+  more (or as part of the full `copy`). It copies only what changed since the
+  last run, then `verify`. The "Drive in step" check catches anything changed
+  after the top-up (for example by parent-organisation staff, who are not
+  locked out).
 
 Calendars: each user's primary calendar is copied, and each team (group)
 calendar they own or manage is copied once, by the first user who reaches
@@ -324,7 +450,11 @@ These counts are not in the JSON output but are shown in the report's
 "carried over notes" row for each user, for information: split threads,
 messages with no Date header (copied, but showing a different date),
 calendar entries of unsupported types not copied, outside shares, shares
-that failed to copy, and shared calendars skipped. A failed share is also
+that failed to copy, shared calendars skipped, other contacts (not copied),
+contacts removed on the source, and for Drive: unsupported files and Forms not
+copied, files kept as Office files, unplaced files, outside and failed shares,
+copies moved to the destination trash, and the fixed note that comments,
+suggestions and version history are not carried over. A failed share is also
 caught by the `verify` sharing check, which compares the source's sharing
 rules with the destination's.
 
@@ -336,6 +466,30 @@ config, here `/Users/movingday/reports/`. Jonathon opens it (use `sudo` to
 copy it somewhere he can read). The report shows the mapped user addresses,
 and for every check and every user the condition, the expected result and
 the actual result. It never contains mail content.
+
+### Models and token limits
+
+The agent only types commands; `movingday` does the copying. If the agent's
+person runs out of tokens, nothing is lost: a background `copy` keeps
+running, re-running it resumes, and a person can type the same commands by
+hand. The risk is lost time during the freeze, not lost data.
+
+- **Model.** Running commands and reading JSON: Sonnet at low effort.
+  Checking on a running copy: Haiku, or a person typing `status`. Diagnosing
+  a failure or a failed `verify` is Jonathon's job, in his own session, not
+  the agent's.
+- **Don't poll.** Start `copy` in the background, then check `status` about
+  once an hour at most, or end the turn and come back later.
+- **New session per phase:** scan, Drive pre-copy, freeze copy, verify.
+  Carry only the last `status` line into the next session.
+- **Keep `wsagent`'s Claude bare.** No plugins or connectors, just the
+  shell. Each connected tool adds to the cost of every turn.
+- **Time the freeze around limits.** Start the freeze copy just after the
+  operator's usage limit resets. For the cutover week, consider a higher
+  plan, or an API key with a spending cap as a backup.
+- **Fallback card.** The operator keeps the exact `status` and `verify`
+  lines from this section on paper, so a token limit means a pause, not a
+  stall.
 
 ## 8. Standing instructions for the agent
 

@@ -1,9 +1,11 @@
 """The only code that talks to Google. Errors surface as ApiError carrying a status-derived reason only.
 
 Real wrappers are first exercised in the rehearsal; see docs/rehearsal-checklist.md.
+The People (contacts) wrapper is first exercised in the rehearsal too.
 """
 import base64
 import http.client
+import io
 import json
 import ssl
 import threading
@@ -15,7 +17,7 @@ from google.auth.exceptions import TransportError
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaInMemoryUpload
+from googleapiclient.http import HttpRequest, MediaInMemoryUpload, MediaIoBaseDownload
 
 
 class ApiError(Exception):
@@ -43,7 +45,7 @@ class RawMessage:
     thread_id: str
 
 
-_RATE_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+_RATE_REASONS = {"rateLimitExceeded", "userRateLimitExceeded", "sharingRateLimitExceeded"}
 
 
 def _to_api_error(e: HttpError) -> ApiError:
@@ -55,6 +57,8 @@ def _to_api_error(e: HttpError) -> ApiError:
             errors = json.loads(e.content)["error"]["errors"]
             if any(x.get("reason") in _RATE_REASONS for x in errors):
                 return ApiError("rate_limited", True)
+            if any(x.get("reason") == "exportSizeLimitExceeded" for x in errors):
+                return ApiError("export_size_limit", False)
         except Exception:
             pass
     return ApiError(f"http_{status}", status >= 500)
@@ -158,6 +162,11 @@ class Gmail(_Google):
         )
         return value, m.get("labelIds", [])
 
+    def set_labels(self, user, msg_id, add, remove) -> None:
+        """Destination only: brings an adopted earlier copy's labels in line with the source."""
+        self._call(lambda: self._m(user).messages().modify(
+            userId="me", id=msg_id, body={"addLabelIds": add, "removeLabelIds": remove}))
+
     def insert(self, user, raw, label_ids, thread_id) -> tuple[str, str]:
         body = {"labelIds": label_ids}
         if thread_id is not None:
@@ -222,6 +231,229 @@ class Calendar(_Google):
             raise ValueError("send_notifications must be False")
         self._call(lambda: self._svc(user).acl().insert(
             calendarId=cal_id, body=rule, sendNotifications=send_notifications))
+
+
+PERSON_FIELDS = ("names", "emailAddresses", "phoneNumbers", "addresses", "organizations", "biographies",
+                 "birthdays", "events", "urls", "relations", "nicknames", "memberships")
+
+
+class People(_Google):
+    """Label membership is written through the `memberships` field of create/update; there is no
+    contactGroups.members call. Nothing here deletes."""
+    _api, _version = "people", "v1"
+
+    def list_contacts(self, user) -> list[dict]:
+        fields = ",".join(PERSON_FIELDS + ("metadata",))
+        return self._all(lambda tok: self._svc(user).people().connections().list(
+            resourceName="people/me", personFields=fields, sources=["READ_SOURCE_TYPE_CONTACT"], pageSize=1000,
+            pageToken=tok), "connections")
+
+    def count_other_contacts(self, user) -> int:
+        return len(self._all(lambda tok: self._svc(user).otherContacts().list(
+            readMask="metadata", pageSize=1000, pageToken=tok), "otherContacts"))
+
+    def list_groups(self, user) -> list[dict]:
+        groups = self._all(lambda tok: self._svc(user).contactGroups().list(pageSize=1000, pageToken=tok),
+                           "contactGroups")
+        return [{"resourceName": g["resourceName"], "name": g.get("name", ""), "groupType": g.get("groupType"),
+                 "memberCount": g.get("memberCount", 0)} for g in groups]
+
+    def create_group(self, user, name) -> str:
+        try:
+            return self._call(lambda: self._svc(user).contactGroups().create(
+                body={"contactGroup": {"name": name}}))["resourceName"]
+        except ApiError as e:
+            if e.reason != "http_409":
+                raise
+        for g in self.list_groups(user):
+            if g["groupType"] == "USER_CONTACT_GROUP" and g["name"].lower() == name.lower():
+                return g["resourceName"]
+        raise ApiError("http_409", False)
+
+    def create_contact(self, user, body) -> tuple[str, str]:
+        # ponytail: with_retry can repeat a POST whose response was lost, creating a duplicate contact;
+        # compare reports it as extra.
+        p = self._call(lambda: self._svc(user).people().createContact(body=body, personFields="metadata"))
+        return p["resourceName"], p["etag"]
+
+    def update_contact(self, user, resource, body) -> str:
+        """body must carry what get_update_meta returns (etag and metadata.sources)."""
+        return self._call(lambda: self._svc(user).people().updateContact(
+            resourceName=resource, updatePersonFields=",".join(PERSON_FIELDS), personFields="metadata",
+            body=body))["etag"]
+
+    def get_update_meta(self, user, resource) -> dict:
+        """{"etag", "metadata": {"sources": [CONTACT source]}}: updateContact answers 400 without
+        metadata.sources, and 400 failedPrecondition when that source's etag is stale."""
+        p = self._call(lambda: self._svc(user).people().get(resourceName=resource, personFields="metadata"))
+        src = next((x for x in p.get("metadata", {}).get("sources", []) if x.get("type") == "CONTACT"), None)
+        if src is None:
+            raise ApiError("no_contact_source", False)
+        return {"etag": p["etag"], "metadata": {"sources": [{k: src.get(k) for k in ("type", "id", "etag")}]}}
+
+
+CHUNK = 8 * 1024 * 1024  # a multiple of 256 KiB, as resumable uploads require
+SRC_KEY = "movingday_src"
+FOLDER = "application/vnd.google-apps.folder"
+_ITEM = "id,mimeType,parents,version,modifiedTime,createdTime,md5Checksum,size,name,description,starred"
+
+
+class _Step:
+    """Lets _call/_execute drive any callable that raises HttpError, e.g. a download's next_chunk."""
+
+    def __init__(self, fn):
+        self.execute = fn
+
+
+def _slices(data: bytes):
+    for i in range(0, len(data), CHUNK):
+        yield data[i:i + CHUNK]
+
+
+class Drive(_Google):
+    """File content is passed through as chunks of at most CHUNK bytes, never joined and never on disk.
+    Nothing here deletes a file; remove_permission and trash are the only removals."""
+    _api, _version = "drive", "v3"
+
+    def _f(self, user):
+        return self._svc(user).files()
+
+    def _raw(self, user, url, method="GET", body=None, headers=None, ok=(200,)):
+        """One authorised HTTP request; returns (response, content). Used where googleapiclient cannot
+        stream (export links, uploads of unknown length)."""
+        def once():
+            try:
+                resp, content = self._svc(user)._http.request(url, method, body=body, headers=headers or {})
+            except (TimeoutError, ConnectionError, http.client.HTTPException, httplib2.ServerNotFoundError,
+                    ssl.SSLError, TransportError):
+                raise ApiError("network_error", True) from None
+            if resp.status not in ok:
+                raise _to_api_error(HttpError(resp, content))
+            return resp, content
+
+        return with_retry(once)
+
+    def root_id(self, user) -> str:
+        return self._call(lambda: self._f(user).get(fileId="root", fields="id"))["id"]
+
+    def list_owned(self, user) -> list[dict]:
+        return self._all(lambda tok: self._f(user).list(
+            q="'me' in owners and trashed=false", fields=f"nextPageToken,files({_ITEM})", pageSize=1000,
+            pageToken=tok), "files")
+
+    def list_shared_owners(self, user) -> list[str]:
+        files = self._all(lambda tok: self._f(user).list(
+            q="not 'me' in owners and trashed=false", fields="nextPageToken,files(owners(emailAddress))",
+            pageSize=1000, pageToken=tok), "files")
+        return [o["emailAddress"] for f in files for o in f.get("owners", [])[:1] if "emailAddress" in o]
+
+    def list_permissions(self, user, file_id) -> list[dict]:
+        return self._all(lambda tok: self._svc(user).permissions().list(
+            fileId=file_id, fields="nextPageToken,permissions(id,role,type,emailAddress,domain,allowFileDiscovery)",
+            pageSize=100, pageToken=tok), "permissions")
+
+    def _stream(self, req):
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(buf, req, chunksize=CHUNK)
+        done = False
+        while not done:
+            _, done = self._call(lambda: _Step(dl.next_chunk))
+            data = buf.getvalue()
+            buf.seek(0)
+            buf.truncate()
+            if data:
+                yield data
+
+    def download(self, user, file_id):
+        yield from self._stream(self._f(user).get_media(fileId=file_id))
+
+    def export(self, user, file_id, mime):
+        try:
+            data = self._call(lambda: self._f(user).export(fileId=file_id, mimeType=mime))
+        except ApiError as e:  # the normal export is capped by Google (10 MB), so it is held whole
+            if e.reason != "export_size_limit":
+                raise
+        else:
+            yield from _slices(data)
+            return
+        # ponytail: the link is streamed in CHUNK ranges; Range support on export links is confirmed in rehearsal.
+        try:
+            link = self._call(lambda: self._f(user).get(fileId=file_id, fields="exportLinks")
+                              ).get("exportLinks", {}).get(mime)
+            if not link:
+                raise ApiError("export_too_large", False)
+            yield from self._stream(HttpRequest(self._svc(user)._http, lambda resp, content: content, link))
+        except ApiError as e:
+            if e.reason in ("network_error", "rate_limited"):  # not about size: keep the reason, retry next run
+                raise
+            raise ApiError("export_too_large", False) from None
+
+    def create_folder(self, user, meta) -> str:
+        body = {**meta, "mimeType": FOLDER}
+        return self._call(lambda: self._f(user).create(body=body, fields="id"))["id"]
+
+    def _session(self, user, method, url, meta, mime) -> str:
+        resp, _ = self._raw(user, url + "&fields=id", method, json.dumps(meta),
+                            {"Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": mime})
+        return resp["location"]
+
+    def _send(self, user, loc, chunks) -> str:
+        """Resumable upload of unknown length: one chunk of lookahead tells which one is last."""
+        it = iter(chunks)
+        cur, start = next(it, b""), 0
+        while True:
+            nxt = next(it, None)
+            end = start + len(cur)
+            rng = (f"bytes {start}-{end - 1}/" if cur else "bytes */") + (str(end) if nxt is None else "*")
+            _, content = self._raw(user, loc, "PUT", cur, {"Content-Range": rng, "Content-Length": str(len(cur))},
+                                   ok=(200, 201) if nxt is None else (308,))
+            if nxt is None:
+                return json.loads(content)["id"]
+            cur, start = nxt, end
+
+    def upload(self, user, meta, chunks, mime, convert) -> tuple[str, bool]:
+        """chunks is a factory returning a fresh iterator, so a refused conversion can be retried unconverted."""
+        url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable"
+        if convert:
+            try:
+                return self._send(user, self._session(user, "POST", url, meta, mime), chunks()), True
+            except ApiError as e:  # refusal: 400, or 403 for a reason other than rate limiting (those retried)
+                if e.retryable or e.reason not in ("http_400", "http_403"):
+                    raise
+        loc = self._session(user, "POST", url, {**meta, "mimeType": mime}, mime)
+        return self._send(user, loc, chunks()), False
+
+    def update_content(self, user, file_id, chunks, mime) -> None:
+        url = f"https://www.googleapis.com/upload/drive/v3/files/{file_id}?uploadType=resumable"
+        self._send(user, self._session(user, "PATCH", url, {}, mime), chunks)
+
+    def update_meta(self, user, file_id, meta, add_parents="", remove_parents="") -> None:
+        if "trashed" in meta:
+            raise ValueError("use trash()")
+        self._call(lambda: self._f(user).update(fileId=file_id, body=meta, addParents=add_parents or None,
+                                                removeParents=remove_parents or None, fields="id"))
+
+    def find_by_src(self, user, src_id) -> str | None:
+        files = self._call(lambda: self._f(user).list(
+            q=f"'me' in owners and appProperties has {{ key='{SRC_KEY}' and value='{src_id}' }} and trashed=false",
+            fields="files(id)", pageSize=1)).get("files", [])
+        return files[0]["id"] if files else None
+
+    def list_created(self, user) -> list[dict]:
+        return self._all(lambda tok: self._f(user).list(
+            q="'me' in owners and trashed=false",
+            fields="nextPageToken,files(id,mimeType,parents,md5Checksum,appProperties)",
+            pageSize=1000, pageToken=tok), "files")
+
+    def add_permission(self, user, file_id, perm) -> str:
+        return self._call(lambda: self._svc(user).permissions().create(
+            fileId=file_id, body=perm, sendNotificationEmail=False, fields="id"))["id"]
+
+    def remove_permission(self, user, file_id, perm_id) -> None:
+        self._call(lambda: self._svc(user).permissions().delete(fileId=file_id, permissionId=perm_id))
+
+    def trash(self, user, file_id) -> None:
+        self._call(lambda: self._f(user).update(fileId=file_id, body={"trashed": True}, fields="id"))
 
 
 class Directory(_Google):

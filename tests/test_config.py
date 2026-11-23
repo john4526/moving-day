@@ -2,6 +2,8 @@ import os
 
 import pytest
 
+from fakes import make_writable_by_others
+from movingday import config
 from movingday.config import load_config
 
 BASE = '''
@@ -45,7 +47,7 @@ def test_config_owned_by_user_and_not_writable_by_others_accepted(tmp_path, mode
 @pytest.mark.parametrize("mode", [0o664, 0o646])
 def test_config_writable_by_group_or_others_refused(tmp_path, mode):
     p = write(tmp_path)
-    os.chmod(p, mode)
+    make_writable_by_others(p, mode)
     with pytest.raises(Exception) as e:
         load_config(p)
     assert e.value.reason == "untrusted_file"
@@ -53,7 +55,11 @@ def test_config_writable_by_group_or_others_refused(tmp_path, mode):
 
 def test_config_owned_by_someone_else_refused(tmp_path, monkeypatch):
     p = write(tmp_path)
-    monkeypatch.setattr(os, "geteuid", lambda: os.stat(p).st_uid + 1)
+    if os.name == "nt":
+        import win32security as ws
+        monkeypatch.setattr(config, "trusted_sids", lambda: [ws.CreateWellKnownSid(ws.WinWorldSid)])
+    else:
+        monkeypatch.setattr(os, "geteuid", lambda: os.stat(p).st_uid + 1)
     with pytest.raises(Exception) as e:
         load_config(p)
     assert e.value.reason == "untrusted_file"
