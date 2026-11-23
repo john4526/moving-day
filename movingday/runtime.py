@@ -10,6 +10,7 @@ DST_SCOPES = [
     _G + "gmail.insert",
     _G + "gmail.labels",
     _G + "gmail.metadata",
+    _G + "gmail.modify",  # messages.modify: labels of an adopted earlier copy (--allow-existing)
     _G + "calendar",
     _G + "contacts",
     _G + "drive.file",

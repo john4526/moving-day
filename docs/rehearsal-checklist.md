@@ -13,6 +13,9 @@ an item says "else", the fallback is named.
   Else fall back to the full `calendar` scope on the source, and record the
   decision (and change `movingday/runtime.py` to match).
 - [ ] The destination calendar id `primary` works for every call.
+- [ ] If the tool will run on Windows: on that PC, `check --source-only`
+  starts, a config file in the user profile is accepted, and one that
+  another user can change is refused with `untrusted_file`.
 
 ## B. Lockout and freeze
 
@@ -45,6 +48,8 @@ an item says "else", the fallback is named.
   mailbox with the tool used for the real earlier transfer, then run
   `copy --allow-existing KEY`. `adopted` equals the earlier count, nothing
   is duplicated, and `verify` passes.
+- [ ] The destination grant includes `gmail.modify`, and `messages.modify`
+  is accepted with it.
 - [ ] `messages.modify` can change `UNREAD`, `STARRED`, `IMPORTANT`,
   `INBOX` and `CATEGORY_*` on an existing message (the tool leaves `SENT`,
   `DRAFT` and `CHAT` alone).

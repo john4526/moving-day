@@ -207,3 +207,14 @@ def test_contact_gone_while_failed_or_pending_counted_not_failed(env):
     assert {s for _, _, s in led.contact_rows(U).values()} == {"gone"}
     assert led.get_meta(U, "contacts_removed_on_source") == "2"
     assert run(env).removed_on_source == 2
+
+
+def test_contact_deleted_on_destination_is_created_again(env):
+    a, led = env
+    res = a.src_people.add_contact(S, person("A", phone="1"))
+    run(env)
+    a.dst_people.contacts[D].clear()  # someone on the destination deleted the copy
+    edit(a, res, person("A", phone="2"))
+    assert run(env) == ContactStats(1, 1, 0, 0, 0, 0)
+    [c] = dst_contacts(a)
+    assert c["phoneNumbers"] == [{"value": "2"}] and led.failures(U) == {}

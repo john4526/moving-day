@@ -229,6 +229,15 @@ def test_allow_existing_overrides_for_named_user(env, capsys):
     assert code == 0 and len(apis.dst_gmail.messages["a@new.org"]) == 2
 
 
+def test_top_up_after_adoption_needs_no_flag(env, capsys):
+    apis, cfg, _ = env
+    for _ in range(8):  # an earlier transfer; none matches a source message, so all stay unexplained
+        apis.dst_gmail.add_message("b@new.org", b"Message-ID: <old@x>\r\n\r\nx", ["INBOX"])
+    assert run(capsys, "copy", "--batch", "b1", "--allow-existing", "u002", "--config", cfg)[0] == 0
+    code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
+    assert code == 0 and out[0]["ok"] is True
+
+
 def test_second_copy_refused_while_first_holds_lock(env, capsys):
     apis, cfg, tmp = env
     with open(tmp / "l.db.lock", "w") as f:

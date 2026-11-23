@@ -616,3 +616,21 @@ never appears in output, logs, ledger or report.
   contacts plan) land before the Drive CLI work, which builds on them.
 - `tests/test_no_destructive_calls.py` is widened to allow exactly the two
   destination Drive removals above, in `api.py`, and nothing else.
+
+## Review fixes (added 23 November 2026)
+
+- The destination grant now includes `gmail.modify`; `messages.modify`,
+  which adoption uses, is not allowed by the other three Gmail scopes.
+- An API error while adopting one message marks it failed and holds it back
+  from that run's copy, so its earlier copy is not duplicated. Adoption is
+  marked finished only once a run adopts without errors.
+- Once adoption has finished for a user, `copy` no longer refuses that
+  mailbox as not empty, so top-up runs need no `--allow-existing`.
+- A Drive copy or contact that was deleted on the destination is copied
+  again. For Drive, both the listing and a direct lookup by source id must
+  miss the copy first.
+- A network or rate-limit error on the export link keeps its own reason;
+  any other failure there is still `export_too_large`.
+- Windows: the lock uses `msvcrt`, and the trusted-file check reads the
+  owner and access list. An access-list entry of a type the check does not
+  understand makes the file untrusted.

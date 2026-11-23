@@ -88,9 +88,14 @@ def copy_contacts(src, dst, ledger, user_key, src_user, dst_user) -> ContactStat
         body = _body(p, gmap)
         try:
             if did:
-                _update(dst, dst_user, did, body)
-                st.contacts_updated += 1
-            else:
+                try:
+                    _update(dst, dst_user, did, body)
+                    st.contacts_updated += 1
+                except ApiError as e:
+                    if e.reason != "http_404":
+                        raise
+                    did = ""  # the copy was deleted on the destination: create it again
+            if not did:
                 # ponytail: a pending row (crash mid-create) is overwritten and the contact created again;
                 # contacts have no stable dedupe key. Worst case one duplicate per crash, which compare reports.
                 ledger.set_contact(user_key, sid, "", etag, "pending")

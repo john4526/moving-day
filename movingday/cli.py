@@ -176,7 +176,9 @@ def _copy(config, mapping, a):
         try:
             for u in users:
                 total = apis.dst_gmail.profile(u.destination)["messagesTotal"]
-                if u.key not in a.allow_existing and total > config.max_existing + ledger.counts(u.key)["done"]:
+                # a completed adoption is a person's standing answer for this mailbox: top-up runs need no flag
+                if (u.key not in a.allow_existing and ledger.get_meta(u.key, "adopt_done") is None
+                        and total > config.max_existing + ledger.counts(u.key)["done"]):
                     refused.append({"user": u.key, "ok": False, "reason": "destination_not_empty"})
         finally:
             ledger.close()

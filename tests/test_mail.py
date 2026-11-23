@@ -334,3 +334,19 @@ def test_interrupted_adoption_resumes_without_double_matching(env):
     run_adopt(env)
     assert len(dst_msgs(env)) == 4
     assert led.counts(U)["done"] == 4 and led.adopted_count(U) == 3
+
+
+def test_adoption_error_holds_one_message_and_retries_next_run(env):
+    a, led = env
+    for n in range(2):
+        a.dst_gmail.add_message("d@x", raw(n), ["INBOX"])
+        a.src_gmail.add_message("s@x", raw(n), ["INBOX", "STARRED"])  # each adopted copy needs a label change
+    a.src_gmail.add_message("s@x", raw(9), ["INBOX"])
+    a.dst_gmail.fail_next("set_labels", ApiError("http_403", retryable=False))
+    st = run_adopt(env)
+    # the failed one is not copied (that would duplicate its earlier copy); the rest carries on
+    assert st == MailStats(found=3, copied=1, skipped=0, failed=1, adopted=1)
+    assert len(dst_msgs(env)) == 3 and led.failures(U) == {"http_403": 1}
+    st = run_adopt(env)
+    assert st == MailStats(found=3, copied=0, skipped=0, failed=0, adopted=1)
+    assert len(dst_msgs(env)) == 3 and led.counts(U) == {"done": 3, "failed": 0, "pending": 0}

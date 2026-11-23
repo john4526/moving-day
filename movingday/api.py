@@ -383,7 +383,9 @@ class Drive(_Google):
             if not link:
                 raise ApiError("export_too_large", False)
             yield from self._stream(HttpRequest(self._svc(user)._http, lambda resp, content: content, link))
-        except ApiError:
+        except ApiError as e:
+            if e.reason in ("network_error", "rate_limited"):  # not about size: keep the reason, retry next run
+                raise
             raise ApiError("export_too_large", False) from None
 
     def create_folder(self, user, meta) -> str:

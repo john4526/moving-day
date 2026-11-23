@@ -523,3 +523,16 @@ def test_copy_with_no_parent_moved_by_adding_only(env):
     move = called(a.dst_drive, "update_meta")[0][1]
     assert move["remove_parents"] == "" and move["add_parents"] == dst_of(env, folder)["id"]
     assert a.dst_drive.files[did]["parents"] == [dst_of(env, folder)["id"]]
+
+
+def test_copy_trashed_on_destination_is_copied_again(env):
+    a, led = env
+    sid = a.src_drive.add_file(S, PDF, content=b"x")
+    run(env)
+    old = led.drive_rows(U)[sid]["dst_id"]
+    a.dst_drive.files[old]["trashed"] = True  # someone on the destination threw the copy away
+    st = run(env)
+    new = led.drive_rows(U)[sid]
+    assert st.files_copied == 1 and st.files_failed == 0
+    assert new["state"] == "done" and new["dst_id"] != old and not a.dst_drive.files[new["dst_id"]]["trashed"]
+    assert run(env).files_copied == 0

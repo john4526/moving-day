@@ -225,7 +225,12 @@ def copy_drive(src, dst, ledger, mapping, user_key, src_user, dst_user, dest_dom
         src_parent = (item.get("parents") or [""])[0]
         dst_parent, placed = target(src_parent)
         try:
-            if row and row["dst_id"] and row["state"] in ("done", "failed"):
+            have = bool(row and row["dst_id"] and row["state"] in ("done", "failed"))
+            # a copy deleted or trashed on the destination is copied again; both the listing and a direct
+            # lookup must miss it, so a short listing alone cannot cause a duplicate
+            if have and row["dst_id"] not in created and not dst.find_by_src(dst_user, sid):
+                have = False
+            if have:
                 did, kind, old_fp = row["dst_id"], row["kind"], row["share_fp"]
                 if item.get("version") != row["src_version"]:
                     # uploaded files have a checksum; Google files only a modified time

@@ -67,11 +67,13 @@ def _recover(dst, ledger, user_key, dst_user) -> None:
             ledger.drop_pending(user_key, src_id)
 
 
-def _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) -> int:
+def _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) -> tuple[int, set]:
     """Once per user: each copy an earlier transfer left in the destination is matched to a source message by
-    Message-ID, its labels set to the source's, and recorded as done, so it is not copied a second time."""
+    Message-ID, its labels set to the source's, and recorded as done, so it is not copied a second time.
+    Returns (adopted, held): a message whose adoption hit an API error is marked failed and held back from
+    this run's copy (copying it could duplicate its earlier copy); adoption then runs again next time."""
     if ledger.get_meta(user_key, "adopt_done") is not None:
-        return 0
+        return 0, set()
     claimed = ledger.done_dst_ids(user_key)
     earlier: dict[str, list[tuple[str, str, set]]] = {}
     for mid, thread in dst.list_messages(dst_user):
@@ -79,29 +81,35 @@ def _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) -> in
             header, ids = dst.get_header_and_labels(dst_user, mid)
             if header is not None and header.strip():
                 earlier.setdefault(_hash_header(header), []).append((mid, thread, set(ids)))
-    done, n = ledger.done_ids(user_key), 0
+    done, n, held = ledger.done_ids(user_key), 0, set()
     for src_id, src_thread in listed:
         if not earlier:
             break
         if src_id in done:
             continue
-        header, ids = src.get_header_and_labels(src_user, src_id)
-        if header is None or not header.strip() or SKIP_LABELS & set(ids) or any(i not in labels for i in ids):
-            continue  # copied the normal way (or failed there with its reason)
-        h = _hash_header(header)
-        if h not in earlier:
+        try:
+            header, ids = src.get_header_and_labels(src_user, src_id)
+            if header is None or not header.strip() or SKIP_LABELS & set(ids) or any(i not in labels for i in ids):
+                continue  # copied the normal way (or failed there with its reason)
+            h = _hash_header(header)
+            if h not in earlier:
+                continue
+            mid, thread, have = earlier[h].pop(0)
+            if not earlier[h]:
+                del earlier[h]
+            want = {labels[i] for i in ids}
+            add, remove = sorted(want - have - FIXED_LABELS), sorted(have - want - FIXED_LABELS)
+            if add or remove:  # before the ledger write, so an interrupted run simply repeats it
+                dst.set_labels(dst_user, mid, add, remove)
+        except ApiError as e:
+            ledger.mark_failed(user_key, src_id, e.reason)
+            held.add(src_id)
             continue
-        mid, thread, have = earlier[h].pop(0)
-        if not earlier[h]:
-            del earlier[h]
-        want = {labels[i] for i in ids}
-        add, remove = sorted(want - have - FIXED_LABELS), sorted(have - want - FIXED_LABELS)
-        if add or remove:  # before the ledger write, so an interrupted run simply repeats it
-            dst.set_labels(dst_user, mid, add, remove)
         ledger.mark_adopted(user_key, src_id, src_thread, h, mid, thread)
         n += 1
-    ledger.set_meta(user_key, "adopt_done", "1")
-    return n
+    if not held:
+        ledger.set_meta(user_key, "adopt_done", "1")
+    return n, held
 
 
 def copy_mail(src, dst, ledger, user_key, src_user, dst_user, adopt=False) -> MailStats:
@@ -114,11 +122,12 @@ def copy_mail(src, dst, ledger, user_key, src_user, dst_user, adopt=False) -> Ma
 
     # ponytail: relies on list order being newest-first; sort by internalDate if the rehearsal shows split threads
     listed = list(reversed(src.list_messages(src_user)))
-    adopted = _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) if adopt else 0
+    adopted, held = _adopt(src, dst, ledger, user_key, src_user, dst_user, labels, listed) if adopt else (0, set())
     done = ledger.done_ids(user_key)
-    copied = skipped = failed = 0
+    copied = skipped = 0
+    failed = len(held)
     for msg_id, _thread in listed:
-        if msg_id in done:
+        if msg_id in done or msg_id in held:
             continue
         try:
             m = src.get_raw(src_user, msg_id)

@@ -94,7 +94,7 @@ https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/c
 **Destination account scopes:**
 
 ```
-https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/contacts,https://www.googleapis.com/auth/drive.file
+https://www.googleapis.com/auth/gmail.insert,https://www.googleapis.com/auth/gmail.labels,https://www.googleapis.com/auth/gmail.metadata,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/contacts,https://www.googleapis.com/auth/drive.file
 ```
 
 Notes:
@@ -107,6 +107,9 @@ Notes:
 - All source APIs share one scope list. Until the parent organisation adds
   `drive.readonly`, every copy fails, mail, calendars and contacts included,
   not only Drive.
+- `gmail.modify` on the destination is used only to set the labels of mail an
+  earlier transfer left there (`copy --allow-existing`). The tool never
+  deletes or trashes mail.
 - The destination uses `drive.file`: the tool sees only the files it created.
   If the rehearsal shows that is not enough, the fallback is the full
   `https://www.googleapis.com/auth/drive` scope on the destination, recorded
@@ -187,6 +190,12 @@ agent must not.**
    must not be writable by anyone else. The tool checks this every time it
    starts and refuses with the reason `untrusted_file` (exit 2) otherwise.
    This stops anyone pointing `--config` at a file of their own.
+
+   On Windows the same check reads the file's owner and access list: the
+   owner must be the user running the tool (or SYSTEM or Administrators),
+   and no other user or group may have write access. The steps above are for
+   macOS; the Windows set-up, without the separate `movingday` and `wsagent`
+   users, is in the README under "Running on Windows".
 7. Keep the Mac awake for the whole copy (System Settings, then Lock Screen
    or Battery, or `caffeinate`).
 
@@ -378,6 +387,11 @@ copy are copied. Nothing earlier is deleted.
 
 - Messages with no Message-ID header can't be matched and are copied
   again; `verify` reports any resulting duplicates.
+- The flag is needed only until adoption has finished for that user. Later
+  runs for the same user are not refused for the earlier mail.
+- If setting labels on an earlier copy fails, that message is reported as
+  failed and is not copied (copying it would duplicate the earlier copy).
+  Run the same command again, with the flag, to retry it.
 - Earlier copies of mail since deleted on the source stay on the
   destination. They count as extra mail already there, which `verify`
   allows.

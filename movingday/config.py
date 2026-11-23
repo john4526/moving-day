@@ -37,9 +37,17 @@ if os.name == "nt":
         if sd.GetSecurityDescriptorOwner() not in trusted or dacl is None:  # no DACL = everyone has full access
             raise UntrustedFile()
         for i in range(dacl.GetAceCount()):
-            (ace_type, flags), mask, sid = dacl.GetAce(i)
-            if (ace_type == con.ACCESS_ALLOWED_ACE_TYPE and not flags & con.INHERIT_ONLY_ACE
-                    and mask & _WRITE and sid != _OWNER_RIGHTS and sid not in trusted):
+            try:
+                ace = dacl.GetAce(i)
+                (ace_type, flags), mask, sid = ace[0], ace[1], ace[-1]
+            except Exception:  # an entry pywin32 cannot read (e.g. a conditional one) might grant anything
+                raise UntrustedFile() from None
+            if ace_type == con.ACCESS_DENIED_ACE_TYPE:
+                continue
+            if ace_type != con.ACCESS_ALLOWED_ACE_TYPE:  # object or conditional entries: refuse, don't guess
+                raise UntrustedFile()
+            if (not flags & con.INHERIT_ONLY_ACE and mask & _WRITE
+                    and sid != _OWNER_RIGHTS and sid not in trusted):
                 raise UntrustedFile()
 else:
     def require_trusted(f) -> None:
