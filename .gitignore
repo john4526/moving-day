@@ -21,3 +21,4 @@ reports/
 *.pdf
 .DS_Store
 .superpowers/
+docs/byron-claude-code-setup.md
