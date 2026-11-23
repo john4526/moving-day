@@ -25,6 +25,10 @@ if os.name == "nt":
                 ws.CreateWellKnownSid(ws.WinLocalSystemSid),
                 ws.CreateWellKnownSid(ws.WinBuiltinAdministratorsSid)]
 
+    # "OWNER RIGHTS": an entry that applies to whoever owns the file. The owner is checked separately,
+    # so it grants nothing to anyone else. Python 3.13+ puts it on directories made with mode 0o700.
+    _OWNER_RIGHTS = ws.ConvertStringSidToSid("S-1-3-4")
+
     def require_trusted(f) -> None:
         """The agent may pass any --config: only trust files owned by this user and writable by no one else."""
         sd = ws.GetSecurityInfo(msvcrt.get_osfhandle(f.fileno()), ws.SE_FILE_OBJECT,
@@ -35,7 +39,7 @@ if os.name == "nt":
         for i in range(dacl.GetAceCount()):
             (ace_type, flags), mask, sid = dacl.GetAce(i)
             if (ace_type == con.ACCESS_ALLOWED_ACE_TYPE and not flags & con.INHERIT_ONLY_ACE
-                    and mask & _WRITE and sid not in trusted):
+                    and mask & _WRITE and sid != _OWNER_RIGHTS and sid not in trusted):
                 raise UntrustedFile()
 else:
     def require_trusted(f) -> None:
