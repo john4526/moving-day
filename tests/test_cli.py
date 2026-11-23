@@ -1,4 +1,3 @@
-import fcntl
 import json
 import os
 
@@ -233,7 +232,7 @@ def test_allow_existing_overrides_for_named_user(env, capsys):
 def test_second_copy_refused_while_first_holds_lock(env, capsys):
     apis, cfg, tmp = env
     with open(tmp / "l.db.lock", "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        cli.lock_nb(f)
         code, out, _ = run(capsys, "copy", "--batch", "b1", "--config", cfg)
     assert code == 2 and out[0]["reason"] == "already_running"
     assert "a@new.org" not in apis.dst_gmail.messages

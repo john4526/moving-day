@@ -1,6 +1,5 @@
 """check, copy, status. Everything the agent sees goes through safeout.emit."""
 import argparse
-import fcntl
 import os
 import sys
 import time
@@ -16,6 +15,22 @@ from movingday.config import UntrustedFile, load_config
 from movingday.ledger import Ledger
 from movingday.mapping import MappingError, load_mapping
 from movingday.safeout import emit, reason_for
+
+if os.name == "nt":
+    import msvcrt
+
+    def lock_nb(f):
+        """Exclusive, non-blocking lock; BlockingIOError if another process holds it."""
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            raise BlockingIOError(*exc.args) from exc
+else:
+    import fcntl
+
+    def lock_nb(f):
+        """Exclusive, non-blocking lock; BlockingIOError if another process holds it."""
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -153,7 +168,7 @@ def _copy(config, mapping, a):
         return 2
     with open(config.ledger_path + ".lock", "w") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_nb(lock)
         except BlockingIOError:
             emit({"command": "copy", "ok": False, "reason": "already_running"})
             return 2
