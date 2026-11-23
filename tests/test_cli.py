@@ -2,7 +2,7 @@ import json
 import os
 
 import pytest
-from fakes import make_apis
+from fakes import make_apis, make_writable_by_others
 
 from movingday.api import ApiError
 from movingday import cli, mail, runtime
@@ -24,8 +24,8 @@ def env(tmp_path, monkeypatch):
         "u002,b@old.org,b@new.org,b1\n"
         "u003,c@old.org,c@new.org,b2\n")
     (tmp_path / "c.toml").write_text(
-        f'source_key_file="s.json"\ndest_key_file="d.json"\nmapping_file="{tmp_path}/m.csv"\n'
-        f'inventory_file="i.json"\nledger_path="{tmp_path}/l.db"\nreport_dir="r"\n'
+        f'source_key_file="s.json"\ndest_key_file="d.json"\nmapping_file="{tmp_path.as_posix()}/m.csv"\n'
+        f'inventory_file="i.json"\nledger_path="{tmp_path.as_posix()}/l.db"\nreport_dir="r"\n'
         'dest_admin="adm@new.org"\ndest_domain="t.new.org"\nmax_existing=1\n')
     apis = make_apis()
     for u in ("a@old.org", "b@old.org", "c@old.org"):
@@ -340,7 +340,7 @@ def test_output_never_contains_addresses(env, capsys):
 @pytest.mark.parametrize("name", ["c.toml", "m.csv"])
 def test_untrusted_config_or_mapping_exits_2(env, capsys, name):
     _, cfg, tmp = env
-    os.chmod(tmp / name, 0o666)
+    make_writable_by_others(tmp / name)
     code, out, _ = run(capsys, "status", "--config", cfg)
     assert code == 2 and out == [{"command": "status", "ok": False, "reason": "untrusted_file"}]
 

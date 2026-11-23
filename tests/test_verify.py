@@ -32,8 +32,8 @@ def env(tmp_path, monkeypatch):
         "u003,c@old.org,c@new.org,b2\n")
     (tmp_path / "i.csv").write_text("type,address,parent\nuser,a@old.org,\n")
     (tmp_path / "c.toml").write_text(
-        f'source_key_file="s.json"\ndest_key_file="d.json"\nmapping_file="{tmp_path}/m.csv"\n'
-        f'inventory_file="{tmp_path}/i.csv"\nledger_path="{tmp_path}/l.db"\nreport_dir="{tmp_path}/r"\n'
+        f'source_key_file="s.json"\ndest_key_file="d.json"\nmapping_file="{tmp_path.as_posix()}/m.csv"\n'
+        f'inventory_file="{tmp_path.as_posix()}/i.csv"\nledger_path="{tmp_path.as_posix()}/l.db"\nreport_dir="{tmp_path.as_posix()}/r"\n'
         'dest_admin="adm@new.org"\ndest_domain="t.new.org"\nmax_existing=1\n')
     apis = make_apis()
     apis.dst_dir.users = {"a@t.new.org"}

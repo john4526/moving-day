@@ -5,6 +5,7 @@ import functools
 import hashlib
 import inspect
 import itertools
+import os
 from email.parser import BytesHeaderParser
 
 from movingday.api import CHUNK, SRC_KEY, ApiError, RawMessage
@@ -487,3 +488,17 @@ def make_apis() -> Apis:
     return Apis(src_gmail=FakeGmail(), dst_gmail=FakeGmail(), src_cal=FakeCalendar(), dst_cal=FakeCalendar(),
                 dst_dir=FakeDirectory(), src_people=FakePeople(), dst_people=FakePeople(),
                 src_drive=FakeDrive(source=True), dst_drive=FakeDrive())
+
+
+def make_writable_by_others(path, mode=0o666):
+    """POSIX: chmod to mode. Windows: grant Everyone write access, the ACL equivalent."""
+    if os.name != "nt":
+        os.chmod(path, mode)
+        return
+    import ntsecuritycon as con
+    import win32security as ws
+    sd = ws.GetFileSecurity(str(path), ws.DACL_SECURITY_INFORMATION)
+    dacl = sd.GetSecurityDescriptorDacl()
+    dacl.AddAccessAllowedAce(ws.ACL_REVISION, con.FILE_GENERIC_WRITE, ws.CreateWellKnownSid(ws.WinWorldSid))
+    sd.SetSecurityDescriptorDacl(1, dacl, 0)
+    ws.SetFileSecurity(str(path), ws.DACL_SECURITY_INFORMATION, sd)
